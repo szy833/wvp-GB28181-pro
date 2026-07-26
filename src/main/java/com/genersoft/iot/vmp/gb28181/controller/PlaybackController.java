@@ -83,14 +83,6 @@ public class PlaybackController {
 
 		log.info("[录像回放] deviceId: {}, channelId: {}, startTime: {}, endTime: {}", deviceId, channelId, startTime, endTime);
 
-		String uuid = UUID.randomUUID().toString();
-		String key = DeferredResultHolder.CALLBACK_CMD_PLAYBACK + deviceId + channelId;
-		DeferredResult<WVPResult<StreamContent>> result = new DeferredResult<>(userSetting.getPlayTimeout().longValue());
-		resultHolder.put(key, uuid, result);
-
-		RequestMessage requestMessage = new RequestMessage();
-		requestMessage.setKey(key);
-		requestMessage.setId(uuid);
 		Device device = deviceService.getDeviceByDeviceId(deviceId);
 		if (device == null) {
 			log.warn("[录像回放] 未找到设备 deviceId: {},channelId:{}", deviceId, channelId);
@@ -102,6 +94,15 @@ public class PlaybackController {
 			log.warn("[录像回放] 未找到通道 deviceId: {},channelId:{}", deviceId, channelId);
 			throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到通道：" + channelId);
 		}
+
+		String uuid = UUID.randomUUID().toString();
+		String key = DeferredResultHolder.CALLBACK_CMD_PLAYBACK + deviceId + channelId;
+		DeferredResult<WVPResult<StreamContent>> result = new DeferredResult<>(userSetting.getPlayTimeout().longValue());
+		resultHolder.put(key, uuid, result);
+
+		RequestMessage requestMessage = new RequestMessage();
+		requestMessage.setKey(key);
+		requestMessage.setId(uuid);
 
 		result.onTimeout(() -> {
 			log.info("[录像回放] 等待超时 deviceId: {}, channelId: {}", deviceId, channelId);

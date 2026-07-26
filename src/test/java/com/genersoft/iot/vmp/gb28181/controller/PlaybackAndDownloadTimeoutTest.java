@@ -3,6 +3,7 @@ package com.genersoft.iot.vmp.gb28181.controller;
 import com.genersoft.iot.vmp.common.InviteInfo;
 import com.genersoft.iot.vmp.common.InviteSessionType;
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.conf.exception.ControllerException;
 import com.genersoft.iot.vmp.gb28181.bean.Device;
 import com.genersoft.iot.vmp.gb28181.bean.DeviceChannel;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
@@ -20,6 +21,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.context.request.async.DeferredResult;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -62,6 +64,28 @@ class PlaybackAndDownloadTimeoutTest {
         verify(fixture.resultHolder).invokeResult(any(RequestMessage.class));
     }
 
+    @Test
+    void missingDeviceDoesNotRegisterDeferredResult() {
+        PlaybackFixture fixture = playbackFixture();
+        when(fixture.devices.getDeviceByDeviceId("device-1")).thenReturn(null);
+
+        assertThrows(ControllerException.class, () -> fixture.controller.start(
+                mock(HttpServletRequest.class), "device-1", "channel-1", "start", "end"));
+
+        verify(fixture.resultHolder, never()).put(anyString(), anyString(), any(DeferredResult.class));
+    }
+
+    @Test
+    void missingChannelDoesNotRegisterDeferredResult() {
+        PlaybackFixture fixture = playbackFixture();
+        when(fixture.channels.getOne("device-1", "channel-1")).thenReturn(null);
+
+        assertThrows(ControllerException.class, () -> fixture.controller.start(
+                mock(HttpServletRequest.class), "device-1", "channel-1", "start", "end"));
+
+        verify(fixture.resultHolder, never()).put(anyString(), anyString(), any(DeferredResult.class));
+    }
+
     @SuppressWarnings("unchecked")
     private static Runnable timeoutCallback(DeferredResult<WVPResult<StreamContent>> result) {
         return (Runnable) ReflectionTestUtils.getField(result, "timeoutCallback");
@@ -86,7 +110,7 @@ class PlaybackAndDownloadTimeoutTest {
                 .thenReturn(invite);
         doNothing().when(playService).playBack(eq(device), eq(channel), eq("start"), eq("end"), any());
         set(controller, playService, invites, devices, channels, resultHolder, settings);
-        return new PlaybackFixture(controller, playService, invites, resultHolder, invite);
+        return new PlaybackFixture(controller, playService, invites, devices, channels, resultHolder, invite);
     }
 
     private static DownloadFixture downloadFixture() {
@@ -154,7 +178,8 @@ class PlaybackAndDownloadTimeoutTest {
     }
 
     private record PlaybackFixture(PlaybackController controller, IPlayService playService,
-                                   IInviteStreamService invites, DeferredResultHolder resultHolder,
+                                   IInviteStreamService invites, IDeviceService devices,
+                                   IDeviceChannelService channels, DeferredResultHolder resultHolder,
                                    InviteInfo invite) {
     }
 
