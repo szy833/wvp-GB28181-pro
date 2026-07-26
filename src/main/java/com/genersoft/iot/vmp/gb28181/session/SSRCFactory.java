@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 @Slf4j
 @Component
@@ -26,6 +27,7 @@ public class SSRCFactory {
 
     private final ConcurrentHashMap<String, BitSet> usedMap = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Object> lockMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, SsrcLease>> activeLeases = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "ssrc-rebuild");
         t.setDaemon(true);
@@ -55,42 +57,120 @@ public class SSRCFactory {
 
     public String getPlaySsrc(String mediaServerId) {
         String suffix = allocate(mediaServerId);
-        return suffix != null ? "0" + suffix : null;
+        return suffix == null ? null : "0" + suffix;
     }
 
     public String getPlayBackSsrc(String mediaServerId) {
         String suffix = allocate(mediaServerId);
-        return suffix != null ? "1" + suffix : null;
+        return suffix == null ? null : "1" + suffix;
+    }
+
+    public SsrcLease allocatePlayLease(String mediaServerId) {
+        return allocateLease(mediaServerId, "0");
+    }
+
+    public SsrcLease allocatePlaybackLease(String mediaServerId) {
+        return allocateLease(mediaServerId, "1");
     }
 
     public String getPlaySsrc(MediaServer mediaServer) {
         if (mediaServer.isRtpEnable() && userSetting.getSsrcRandom()) {
-            return "0" + domainPart + String.format("%04d", ThreadLocalRandom.current().nextInt(10000));
+            return randomLegacy(mediaServer.getId(), "0");
         }
         return getPlaySsrc(mediaServer.getId());
     }
 
     public String getPlayBackSsrc(MediaServer mediaServer) {
         if (mediaServer.isRtpEnable() && userSetting.getSsrcRandom()) {
-            return "1" + domainPart + String.format("%04d", ThreadLocalRandom.current().nextInt(10000));
+            return randomLegacy(mediaServer.getId(), "1");
         }
         return getPlayBackSsrc(mediaServer.getId());
     }
 
+    public SsrcLease allocatePlayLease(MediaServer mediaServer) {
+        if (mediaServer.isRtpEnable() && userSetting.getSsrcRandom()) {
+            return randomLease(mediaServer.getId(), "0");
+        }
+        return allocatePlayLease(mediaServer.getId());
+    }
+
+    public SsrcLease allocatePlaybackLease(MediaServer mediaServer) {
+        if (mediaServer.isRtpEnable() && userSetting.getSsrcRandom()) {
+            return randomLease(mediaServer.getId(), "1");
+        }
+        return allocatePlaybackLease(mediaServer.getId());
+    }
+
+    public void release(SsrcLease lease) {
+        if (lease == null || !lease.isOwned() || lease.getLeaseId() == null) {
+            return;
+        }
+        ConcurrentHashMap<String, SsrcLease> leases = activeLeases.get(lease.getMediaServerId());
+        if (leases == null || leases.remove(lease.getLeaseId()) == null) {
+            return;
+        }
+        synchronized (lockMap.computeIfAbsent(lease.getMediaServerId(), k -> new Object())) {
+            BitSet bits = usedMap.get(lease.getMediaServerId());
+            int suffix = suffixIndex(lease.getSsrc());
+            if (bits != null && suffix >= 0) {
+                bits.clear(suffix);
+            }
+        }
+    }
+
     private String allocate(String mediaServerId) {
         synchronized (lockMap.computeIfAbsent(mediaServerId, k -> new Object())) {
-            BitSet bits = usedMap.computeIfAbsent(mediaServerId, k -> new BitSet(10000));
-            int start = ThreadLocalRandom.current().nextInt(10000);
-            int index = start;
-            do {
-                if (!bits.get(index)) {
-                    bits.set(index);
-                    return domainPart + String.format("%04d", index);
-                }
-                index = (index + 1) % 10000;
-            } while (index != start);
-            log.warn("[SSRC] 媒体节点 {} 的SSRC已用尽", mediaServerId);
-            return null;
+            return allocateLocked(mediaServerId);
+        }
+    }
+
+    private String allocateLocked(String mediaServerId) {
+        BitSet bits = usedMap.computeIfAbsent(mediaServerId, k -> new BitSet(10000));
+        int start = ThreadLocalRandom.current().nextInt(10000);
+        int index = start;
+        do {
+            if (!bits.get(index)) {
+                bits.set(index);
+                return domainPart + String.format("%04d", index);
+            }
+            index = (index + 1) % 10000;
+        } while (index != start);
+        log.warn("[SSRC] 媒体节点 {} 的SSRC已用尽", mediaServerId);
+        return null;
+    }
+
+    private SsrcLease allocateLease(String mediaServerId, String prefix) {
+        // Keep the BitSet reservation and lease index update atomic with rebuild().
+        synchronized (lockMap.computeIfAbsent(mediaServerId, k -> new Object())) {
+            String suffix = allocateLocked(mediaServerId);
+            if (suffix == null) {
+                return null;
+            }
+            String ssrc = prefix + suffix;
+            SsrcLease lease = new SsrcLease(mediaServerId, ssrc, true, UUID.randomUUID().toString());
+            activeLeases.computeIfAbsent(mediaServerId, key -> new ConcurrentHashMap<>())
+                    .put(lease.getLeaseId(), lease);
+            return lease;
+        }
+    }
+
+    private SsrcLease randomLease(String mediaServerId, String prefix) {
+        String ssrc = randomLegacy(mediaServerId, prefix);
+        return new SsrcLease(mediaServerId, ssrc, false, UUID.randomUUID().toString());
+    }
+
+    private String randomLegacy(String mediaServerId, String prefix) {
+        return prefix + domainPart + String.format("%04d", ThreadLocalRandom.current().nextInt(10000));
+    }
+
+    private int suffixIndex(String ssrc) {
+        if (ssrc == null || ssrc.length() < 4) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(ssrc.substring(ssrc.length() - 4));
+        } catch (NumberFormatException e) {
+            return -1;
         }
     }
 
@@ -109,6 +189,7 @@ public class SSRCFactory {
                             ZLMResult<?> result = zlmresTfulUtils.getMediaList(server, null, null, "rtsp", null);
                             if (result != null && result.getCode() == 0 && result.getData() != null) {
                                 List<JSONObject> list = (List<JSONObject>) result.getData();
+                                BitSet activeBits = new BitSet(10000);
                                 for (JSONObject obj : list) {
                                     if (obj.getIntValue("originType") != 3) continue;
                                     String originUrl = obj.getString("originUrl");
@@ -122,6 +203,14 @@ public class SSRCFactory {
                                     } catch (NumberFormatException ignored) {
                                     }
                                 }
+                                for (SsrcLease lease : activeLeases
+                                        .getOrDefault(server.getId(), new ConcurrentHashMap<>()).values()) {
+                                    int suffix = suffixIndex(lease.getSsrc());
+                                    if (suffix >= 0) {
+                                        activeBits.set(suffix);
+                                    }
+                                }
+                                bits.or(activeBits);
                                 usedMap.put(server.getId(), bits);
                                 if (count > 8000) {
                                     log.info("[SSRC重建] 媒体节点 {} 的SSRC使用率已超过80%，请注意扩展服务提升性能", server.getId());

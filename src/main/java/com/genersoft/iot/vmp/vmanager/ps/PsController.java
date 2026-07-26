@@ -106,7 +106,7 @@ public class PsController {
         rtpServerParam.setSsrc(ssrcInt);
         rtpServerParam.setTcpMode(tcpMode);
 
-        int rtpServerPort = receiveRtpServerService.openCommonRTPServer(rtpServerParam, ((code, msg, data) -> {
+        com.genersoft.iot.vmp.service.bean.RtpServerOpenResult openResult = receiveRtpServerService.openCommonRTPServerWithHandle(rtpServerParam, ((code, msg, data) -> {
             if (callBack == null) {
                 return;
             }
@@ -130,16 +130,16 @@ public class PsController {
             }
         }));
 
-        if (rtpServerPort == 0) {
+        if (openResult == null || !openResult.isSuccess()) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "获取端口失败");
         }
 
         // 补充鉴权参数
-        receiveRtpServerService.addAuthenticateInfo(stream, null, false, false, null);
+        receiveRtpServerService.addAuthenticateInfo(openResult, stream, null, false, false, null);
 
         OtherPsSendInfo otherPsSendInfo = new OtherPsSendInfo();
         otherPsSendInfo.setReceiveIp(mediaServer.getSdpIp());
-        otherPsSendInfo.setReceivePort(rtpServerPort);
+        otherPsSendInfo.setReceivePort(openResult.getPort());
         otherPsSendInfo.setCallId(callId);
         otherPsSendInfo.setStream(stream);
 

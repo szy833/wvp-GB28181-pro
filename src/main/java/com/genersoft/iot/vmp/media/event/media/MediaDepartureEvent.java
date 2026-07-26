@@ -8,6 +8,8 @@ import com.genersoft.iot.vmp.media.zlm.dto.hook.OnStreamChangedHookParam;
  * 流离开事件
  */
 public class MediaDepartureEvent extends MediaEvent {
+    private String originUrl;
+
     public MediaDepartureEvent(Object source) {
         super(source);
     }
@@ -18,6 +20,7 @@ public class MediaDepartureEvent extends MediaEvent {
         mediaDepartureEven.setStream(hookParam.getStream());
         mediaDepartureEven.setSchema(hookParam.getSchema());
         mediaDepartureEven.setMediaServer(mediaServer);
+        mediaDepartureEven.setOriginUrl(hookParam.getOriginUrl());
         return mediaDepartureEven;
     }
 
@@ -27,5 +30,13 @@ public class MediaDepartureEvent extends MediaEvent {
         mediaDepartureEven.setStream(hookParam.getStream());
         mediaDepartureEven.setMediaServer(mediaServer);
         return mediaDepartureEven;
+    }
+
+    public String getOriginUrl() {
+        return originUrl;
+    }
+
+    public void setOriginUrl(String originUrl) {
+        this.originUrl = originUrl;
     }
 }

@@ -9,6 +9,9 @@ public class SSRCInfo {
     private String ssrc;
     private String app;
     private String stream;
+    private String resourceId;
+    private String zlmStream;
+    private String mediaServerId;
 
     public SSRCInfo(int port, String ssrc, String app, String stream) {
         this.port = port;

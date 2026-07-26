@@ -173,4 +173,29 @@ class SSRCFactoryTest {
         }
         assertEquals(100, results.size(), "All 100 calls should return different SSRCs");
     }
+
+    @Test
+    void lease_canBeReleasedAndReallocated() {
+        SsrcLease lease = ssrcFactory.allocatePlayLease(SERVER_ID);
+        assertTrue(lease.isOwned());
+        ssrcFactory.release(lease);
+        assertNotNull(ssrcFactory.allocatePlayLease(SERVER_ID));
+    }
+
+    @Test
+    void releasingSameLeaseTwiceIsHarmless() {
+        SsrcLease lease = ssrcFactory.allocatePlayLease(SERVER_ID);
+        ssrcFactory.release(lease);
+        ssrcFactory.release(lease);
+        assertNotNull(ssrcFactory.allocatePlayLease(SERVER_ID));
+    }
+
+    @Test
+    void nonOwnedLeaseDoesNotClearBitSet() throws Exception {
+        SsrcLease lease = new SsrcLease(SERVER_ID, "0200000001", false, "preset");
+        ssrcFactory.release(lease);
+
+        String allocated = ssrcFactory.allocatePlayLease(SERVER_ID).getSsrc();
+        assertNotNull(allocated);
+    }
 }

@@ -33,6 +33,9 @@ public class ZLMServerFactory {
         int result = -1;
         // 查询此rtp server 是否已经存在
         ZLMResult<?> rtpInfoResult = zlmresTfulUtils.getRtpInfo(mediaServerItem, streamId);
+        if (rtpInfoResult == null) {
+            return result;
+        }
         if(rtpInfoResult.getCode() == 0){
             if (rtpInfoResult.getExist() != null && rtpInfoResult.getExist()) {
                 result = rtpInfoResult.getLocal_port();
@@ -44,7 +47,7 @@ public class ZLMServerFactory {
                     ZLMResult<?> zlmResult = zlmresTfulUtils.closeRtpServer(mediaServerItem, param);
                     if (zlmResult != null ) {
                         if (zlmResult.getCode() == 0) {
-                            return createRTPServer(mediaServerItem, streamId, app, ssrc, port,onlyAuto, reUsePort,disableAudio, tcpMode);
+                            return createRTPServer(mediaServerItem, app, streamId, ssrc, port, onlyAuto, disableAudio, reUsePort, tcpMode);
                         }else {
                             log.warn("[开启rtpServer], 重启RtpServer错误");
                         }
@@ -130,13 +133,13 @@ public class ZLMServerFactory {
         param.put("app", app);
         param.put("stream_id", streamId);
         zlmresTfulUtils.closeRtpServer(serverItem, param, zlmResult -> {
-            if (zlmResult.getCode() == 0) {
+            if (zlmResult != null && zlmResult.getCode() == 0) {
                 if (callback != null) {
                     callback.run(zlmResult.getHit() >= 1);
                 }
                 return;
             }else {
-                log.error("关闭RTP Server 失败: " + zlmResult.getMsg());
+                log.error("关闭RTP Server 失败: {}", zlmResult == null ? "空响应" : zlmResult.getMsg());
             }
             if (callback != null) {
                 callback.run(false);

@@ -5,6 +5,7 @@ import lombok.Data;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import com.genersoft.iot.vmp.gb28181.session.SsrcLease;
 
 @Getter
 @Setter
@@ -34,6 +35,7 @@ public class RTPServerParam {
      * tcp模式，0时为不启用tcp监听，1时为启用tcp监听，2时为tcp主动连接模式
      */
     private Integer tcpMode;
+    private SsrcLease ssrcLease;
 
     public RTPServerParam(MediaServer mediaServer, String app, String streamId, Long ssrc, Integer port,
                           boolean onlyAuto, boolean disableAudio, boolean reUsePort, Integer tcpMode) {

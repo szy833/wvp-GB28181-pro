@@ -618,24 +618,23 @@ public class PlatformServiceImpl implements IPlatformService {
                             log.info("[国标级联] 发起语音喊话 收流超时 deviceId: {}, channelId: {}", platform.getServerGBId(), channel.getGbDeviceId());
                             // 点播超时回复BYE 同时释放ssrc以及此次点播的资源
                             try {
-                                commanderForPlatform.streamByeCmd(platform, channel, data.getSsrcInfo().getApp(), data.getSsrcInfo().getStream(), null, null);
+                                if (data != null && data.getSsrcInfo() != null) {
+                                    commanderForPlatform.streamByeCmd(platform, channel, data.getSsrcInfo().getApp(), data.getSsrcInfo().getStream(), null, null);
+                                }
                             } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                                 log.error("[点播超时]， 发送BYE失败 {}", e.getMessage());
                             } finally {
                                 timeoutCallback.run(1, "收流超时");
-                                receiveRtpServerService.closeRTPServer(mediaServerItem, data.getSsrcInfo().getApp(), data.getSsrcInfo().getStream());
-                                sessionManager.removeByStream(data.getSsrcInfo().getApp(), data.getSsrcInfo().getStream());
+                                if (data != null && data.getSsrcInfo() != null) {
+                                    receiveRtpServerService.closeRTPServer(data.getSsrcInfo());
+                                    sessionManager.removeByStream(data.getSsrcInfo().getApp(), data.getSsrcInfo().getStream());
+                                }
                             }
                         }
                     }
                 }));
-        if (ssrcInfo == null || ssrcInfo.getPort() < 0) {
+        if (ssrcInfo == null || ssrcInfo.getPort() <= 0) {
             log.info("[国标级联] 发起语音喊话 开启端口监听失败， platform: {}, channel： {}", platform.getServerGBId(), channel.getGbDeviceId());
-            SipSubscribe.EventResult<Object> eventResult = new SipSubscribe.EventResult<>();
-            eventResult.statusCode = -1;
-            eventResult.msg = "端口监听失败";
-            eventResult.type = SipSubscribe.EventResultType.failedToGetPort;
-            errorEvent.response(eventResult);
             return;
         }
         log.info("[国标级联] 语音喊话，发起Invite消息 deviceId: {}, channelId: {},收流端口： {}, 收流模式：{}, SSRC: {}, SSRC校验：{}",
@@ -699,7 +698,8 @@ public class PlatformServiceImpl implements IPlatformService {
                     // ssrc检验
                     // 更新ssrc
                     log.info("[Invite 200OK] SSRC修正 {}->{}", ssrcInfo.getSsrc(), ssrcInResponse);
-                    Boolean result = mediaServerService.updateRtpServerSSRC(mediaServerItem, ssrcInfo.getApp(), ssrcInfo.getStream(), ssrcInResponse);
+                    String zlmStream = ssrcInfo.getZlmStream() == null ? ssrcInfo.getStream() : ssrcInfo.getZlmStream();
+                    Boolean result = mediaServerService.updateRtpServerSSRC(mediaServerItem, ssrcInfo.getApp(), zlmStream, ssrcInResponse);
                     if (!result) {
                         try {
                             log.warn("[Invite 200OK] 更新ssrc失败，停止喊话 {}/{}", platform.getServerGBId(), channel.getGbDeviceId());
@@ -707,7 +707,7 @@ public class PlatformServiceImpl implements IPlatformService {
                         } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
                             log.error("[命令发送失败] 停止播放， 发送BYE: {}", e.getMessage());
                         } finally {
-                            receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo.getApp(), ssrcInfo.getStream());
+                            receiveRtpServerService.closeRTPServer(ssrcInfo);
                             sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
 
                             callback.run(InviteErrorCode.ERROR_FOR_RESET_SSRC.getCode(),
@@ -800,7 +800,7 @@ public class PlatformServiceImpl implements IPlatformService {
             log.info("[TCP主动连接对方] 结果： {}", result);
         } catch (SdpException e) {
             log.error("[TCP主动连接对方] serverGbId: {}, channelId: {}, 解析200OK的SDP信息失败", platform.getServerGBId(), channel.getGbDeviceId(), e);
-            receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo.getApp(), ssrcInfo.getStream());
+            receiveRtpServerService.closeRTPServer(ssrcInfo);
             sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
 
             callback.run(InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getCode(),

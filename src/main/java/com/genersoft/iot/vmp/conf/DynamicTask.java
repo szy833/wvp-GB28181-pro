@@ -28,6 +28,19 @@ public class DynamicTask {
 
     private final Map<String, ScheduledFuture<?>> futureMap = new ConcurrentHashMap<>();
     private final Map<String, Runnable> runnableMap = new ConcurrentHashMap<>();
+    // Fixed stripes keep per-task lifecycle locking bounded under UUID-heavy workloads.
+    private static final int OWNER_LOCK_STRIPES = 64;
+    private final Object[] ownerLocks = new Object[OWNER_LOCK_STRIPES];
+
+    public DynamicTask() {
+        for (int i = 0; i < ownerLocks.length; i++) {
+            ownerLocks[i] = new Object();
+        }
+    }
+
+    private Object lockFor(String key) {
+        return ownerLocks[(key.hashCode() & Integer.MAX_VALUE) % OWNER_LOCK_STRIPES];
+    }
 
 
     /**
@@ -70,31 +83,31 @@ public class DynamicTask {
      * @return
      */
     public void startDelay(String key, Runnable task, int delay) {
-        if(ObjectUtils.isEmpty(key)) {
-            return;
+        startDelayWithHandle(key, task, delay);
+    }
+
+    /** Starts a one-shot task and returns the owner handle used for conditional cleanup. */
+    public ScheduledFuture<?> startDelayWithHandle(String key, Runnable task, int delay) {
+        if (ObjectUtils.isEmpty(key) || task == null) {
+            return null;
         }
-        stop(key);
-
-        // 获取执行的时刻
-        Instant startInstant = Instant.now().plusMillis(TimeUnit.MILLISECONDS.toMillis(delay));
-
-        ScheduledFuture future = futureMap.get(key);
-        if (future != null) {
-            if (future.isCancelled()) {
-                log.debug("任务【{}】已存在但是关闭状态！！！", key);
-            } else {
-                log.debug("任务【{}】已存在且已启动！！！", key);
-                return;
+        Object lock = lockFor(key);
+        synchronized (lock) {
+            ScheduledFuture<?> previous = futureMap.remove(key);
+            if (previous != null) {
+                runnableMap.remove(key);
+                previous.cancel(false);
             }
-        }
-        // scheduleWithFixedDelay 必须等待上一个任务结束才开始计时period， cycleForCatalog表示执行的间隔
-        future = taskScheduler.schedule(task, startInstant);
-        if (future != null){
-            futureMap.put(key, future);
-            runnableMap.put(key, task);
-            log.debug("任务【{}】启动成功！！！", key);
-        }else {
-            log.debug("任务【{}】启动失败！！！", key);
+            Instant startInstant = Instant.now().plusMillis(TimeUnit.MILLISECONDS.toMillis(delay));
+            ScheduledFuture<?> future = taskScheduler.schedule(task, startInstant);
+            if (future != null) {
+                futureMap.put(key, future);
+                runnableMap.put(key, task);
+                log.debug("任务【{}】启动成功！！！", key);
+            } else {
+                log.debug("任务【{}】启动失败！！！", key);
+            }
+            return future;
         }
     }
 
@@ -102,13 +115,29 @@ public class DynamicTask {
         if(ObjectUtils.isEmpty(key)) {
             return false;
         }
-        boolean result = false;
-        if (!ObjectUtils.isEmpty(futureMap.get(key)) && !futureMap.get(key).isCancelled() && !futureMap.get(key).isDone()) {
-            result = futureMap.get(key).cancel(false);
-            futureMap.remove(key);
-            runnableMap.remove(key);
+        ScheduledFuture<?> future = futureMap.get(key);
+        if (future == null) {
+            return false;
         }
-        return result;
+        return stop(key, future);
+    }
+
+    /** Stops only the future that still owns the key. */
+    public boolean stop(String key, ScheduledFuture<?> expectedFuture) {
+        if (ObjectUtils.isEmpty(key) || expectedFuture == null) {
+            return false;
+        }
+        Object lock = lockFor(key);
+        synchronized (lock) {
+            if (!futureMap.remove(key, expectedFuture)) {
+                return false;
+            }
+            runnableMap.remove(key);
+            // cancel can return false for an already completed future; ownership was
+            // nevertheless removed, which is the important lifecycle guarantee.
+            expectedFuture.cancel(false);
+            return true;
+        }
     }
 
     public boolean contains(String key) {
@@ -136,10 +165,14 @@ public class DynamicTask {
     public void execute(){
         if (futureMap.size() > 0) {
             for (String key : futureMap.keySet()) {
-                ScheduledFuture<?> future = futureMap.get(key);
-                if (future.isDone() || future.isCancelled()) {
-                    futureMap.remove(key);
-                    runnableMap.remove(key);
+                Object lock = lockFor(key);
+                synchronized (lock) {
+                    ScheduledFuture<?> future = futureMap.get(key);
+                    if (future != null && (future.isDone() || future.isCancelled())) {
+                        if (futureMap.remove(key, future)) {
+                            runnableMap.remove(key);
+                        }
+                    }
                 }
             }
         }

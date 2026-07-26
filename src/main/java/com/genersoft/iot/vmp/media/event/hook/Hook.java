@@ -17,6 +17,8 @@ public class Hook {
 
     private String stream;
 
+    private String mediaServerId;
+
     private Long expireTime;
 
 
@@ -30,17 +32,19 @@ public class Hook {
     }
 
     public static Hook getInstance(HookType hookType, String app, String stream, String mediaServer) {
-        // TODO 后续修改所有方法
-        return Hook.getInstance(hookType, app, stream);
+        Hook hook = Hook.getInstance(hookType, app, stream);
+        hook.setMediaServerId(mediaServer);
+        return hook;
     }
 
     @Override
     public boolean equals(Object obj) {
         if (obj instanceof Hook) {
             Hook param = (Hook) obj;
-            return param.getHookType().equals(this.hookType)
-                    && param.getApp().equals(this.app)
-                    && param.getStream().equals(this.stream);
+            return java.util.Objects.equals(param.getHookType(), this.hookType)
+                    && java.util.Objects.equals(param.getApp(), this.app)
+                    && java.util.Objects.equals(param.getStream(), this.stream)
+                    && java.util.Objects.equals(param.getMediaServerId(), this.mediaServerId);
         }else {
             return false;
         }
@@ -48,6 +52,11 @@ public class Hook {
 
     @Override
     public String toString() {
-        return this.getHookType() + this.getApp() + this.getStream();
+        return this.getHookType() + ":" + this.getMediaServerId() + ":" + this.getApp() + ":" + this.getStream();
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(hookType, mediaServerId, app, stream);
     }
 }

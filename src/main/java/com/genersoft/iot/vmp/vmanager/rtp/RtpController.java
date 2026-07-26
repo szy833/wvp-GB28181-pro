@@ -107,7 +107,7 @@ public class RtpController {
         rtpServerParam.setTcpMode(tcpMode);
 
 
-        int rtpServerPortForVideo =  receiveRtpServerService.openCommonRTPServer(rtpServerParam, ((code, msg, data) -> {
+        com.genersoft.iot.vmp.service.bean.RtpServerOpenResult videoResult = receiveRtpServerService.openCommonRTPServerWithHandle(rtpServerParam, ((code, msg, data) -> {
             if (callBack == null) {
                 return;
             }
@@ -127,10 +127,18 @@ public class RtpController {
             }
         }));
         // 补充鉴权参数
-        receiveRtpServerService.addAuthenticateInfo(stream, null, false, false, null);
+        if (videoResult == null || !videoResult.isSuccess()) {
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "获取视频端口失败");
+        }
+        try {
+            receiveRtpServerService.addAuthenticateInfo(videoResult, stream, null, false, false, null);
+        } catch (RuntimeException e) {
+            receiveRtpServerService.closeRTPServer(videoResult);
+            throw e;
+        }
         rtpServerParam.setStreamId(stream + "_a");
 
-        int rtpServerPortForAudio =  receiveRtpServerService.openCommonRTPServer(rtpServerParam, ((code, msg, data) -> {
+        com.genersoft.iot.vmp.service.bean.RtpServerOpenResult audioResult = receiveRtpServerService.openCommonRTPServerWithHandle(rtpServerParam, ((code, msg, data) -> {
             if (code == InviteErrorCode.SUCCESS.getCode()) {
                 log.info("[开启收流和获取发流信息] 音频流收流成功，callId->{}，stream->{}", callId, stream);
             }else {
@@ -139,9 +147,21 @@ public class RtpController {
         }));
 
         // 补充鉴权参数
-        receiveRtpServerService.addAuthenticateInfo(rtpServerParam.getStreamId(), null, true, false, null);
+        if (audioResult == null || !audioResult.isSuccess()) {
+            receiveRtpServerService.closeRTPServer(videoResult);
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "获取音频端口失败");
+        }
+        try {
+            receiveRtpServerService.addAuthenticateInfo(audioResult, rtpServerParam.getStreamId(), null, true, false, null);
+        } catch (RuntimeException e) {
+            receiveRtpServerService.closeRTPServer(audioResult);
+            receiveRtpServerService.closeRTPServer(videoResult);
+            throw e;
+        }
 
-        if (rtpServerPortForVideo == 0 || rtpServerPortForAudio == 0) {
+        int rtpServerPortForVideo = videoResult.getPort();
+        int rtpServerPortForAudio = audioResult.getPort();
+        if (rtpServerPortForVideo <= 0 || rtpServerPortForAudio <= 0) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "获取端口失败");
         }
         String key = VideoManagerConstants.WVP_OTHER_SEND_RTP_INFO + userSetting.getServerId() + "_"  + callId;
