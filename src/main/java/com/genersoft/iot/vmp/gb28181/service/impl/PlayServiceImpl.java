@@ -512,7 +512,6 @@ public class PlayServiceImpl implements IPlayService {
         dynamicTask.startDelay(timeOutTaskKey, () -> {
 
             log.info("[语音对讲] 收流超时 deviceId: {}, channelId: {}，端口：{}, SSRC: {}", device.getDeviceId(), channel.getDeviceId(), sendRtpInfo.getPort(), sendRtpInfo.getSsrc());
-            timeoutCallback.run();
             // 点播超时回复BYE 同时释放ssrc以及此次点播的资源
             try {
                 cmder.streamByeCmd(device, channel.getDeviceId(), null,  null, callId, null);

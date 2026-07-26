@@ -12,7 +12,6 @@ import com.genersoft.iot.vmp.gb28181.bean.DeviceChannel;
 import com.genersoft.iot.vmp.gb28181.bean.SsrcTransaction;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceService;
-import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import com.genersoft.iot.vmp.gb28181.service.IPlayService;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
 import com.genersoft.iot.vmp.gb28181.transmit.callback.DeferredResultHolder;
@@ -57,9 +56,6 @@ public class PlayController {
 	private SipInviteSessionManager sessionManager;
 
 	@Autowired
-	private IInviteStreamService inviteStreamService;
-
-	@Autowired
 	private DeferredResultHolder resultHolder;
 
 	@Autowired
@@ -92,6 +88,7 @@ public class PlayController {
 		Assert.notNull(device, "设备不存在");
 		DeviceChannel channel = deviceChannelService.getOne(deviceId, channelId);
 		Assert.notNull(channel, "通道不存在");
+		String streamId = String.format("%s_%s", device.getDeviceId(), channel.getDeviceId());
 
 		DeferredResult<WVPResult<StreamContent>> result = new DeferredResult<>(userSetting.getPlayTimeout().longValue());
 
@@ -103,8 +100,12 @@ public class PlayController {
 			wvpResult.setMsg("点播超时");
 			result.setResult(wvpResult);
 
-			inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
-			deviceChannelService.stopPlay(channel.getId());
+			try {
+				playService.stop(InviteSessionType.PLAY, device, channel, streamId);
+			} catch (RuntimeException e) {
+				log.warn("[点播等待超时] 统一停止流程失败，deviceId={}, channelId={}: {}",
+						deviceId, channelId, e.getMessage());
+			}
 		});
 
 		ErrorCallback<StreamInfo> callback  = (code, msg, streamInfo) -> {

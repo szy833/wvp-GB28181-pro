@@ -1,6 +1,7 @@
 package com.genersoft.iot.vmp.gb28181.controller;
 
 import com.genersoft.iot.vmp.common.InviteSessionType;
+import com.genersoft.iot.vmp.common.InviteInfo;
 import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.ControllerException;
@@ -11,6 +12,7 @@ import com.genersoft.iot.vmp.gb28181.bean.RecordInfo;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceService;
 import com.genersoft.iot.vmp.gb28181.service.IPlayService;
+import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import com.genersoft.iot.vmp.gb28181.transmit.callback.DeferredResultHolder;
 import com.genersoft.iot.vmp.gb28181.transmit.callback.RequestMessage;
 import com.genersoft.iot.vmp.gb28181.transmit.cmd.impl.SIPCommander;
@@ -49,6 +51,9 @@ public class GBRecordController {
 
 	@Autowired
 	private IPlayService playService;
+
+	@Autowired
+	private IInviteStreamService inviteStreamService;
 
 	@Autowired
 	private IDeviceChannelService channelService;
@@ -132,6 +137,25 @@ public class GBRecordController {
 			log.warn("[开始历史媒体下载] 未找到通道 deviceId: {},channelId:{}", deviceId, channelId);
 			throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到通道：" + channelId);
 		}
+		result.onTimeout(() -> {
+			log.info("[录像下载] 等待超时 deviceId: {}, channelId: {}", deviceId, channelId);
+			WVPResult<StreamContent> timeoutResult = new WVPResult<>();
+			timeoutResult.setCode(ErrorCode.ERROR100.getCode());
+			timeoutResult.setMsg("下载超时");
+			result.setResult(timeoutResult);
+			requestMessage.setData(timeoutResult);
+			resultHolder.invokeResult(requestMessage);
+			try {
+				InviteInfo inviteInfo = inviteStreamService.getInviteInfoByDeviceAndChannel(
+						InviteSessionType.DOWNLOAD, channel.getId());
+				if (inviteInfo != null) {
+					playService.stop(inviteInfo);
+				}
+			} catch (RuntimeException e) {
+				log.warn("[录像下载] 超时停止流程失败，deviceId={}, channelId={}: {}",
+						deviceId, channelId, e.getMessage());
+			}
+		});
 		playService.download(device, channel, startTime, endTime, Integer.parseInt(downloadSpeed),
 		(code, msg, data)->{
 

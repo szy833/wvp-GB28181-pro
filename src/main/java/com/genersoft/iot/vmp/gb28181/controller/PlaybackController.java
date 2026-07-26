@@ -1,6 +1,7 @@
 package com.genersoft.iot.vmp.gb28181.controller;
 
 import com.genersoft.iot.vmp.common.InviteSessionType;
+import com.genersoft.iot.vmp.common.InviteInfo;
 import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.ControllerException;
@@ -101,6 +102,26 @@ public class PlaybackController {
 			log.warn("[录像回放] 未找到通道 deviceId: {},channelId:{}", deviceId, channelId);
 			throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到通道：" + channelId);
 		}
+
+		result.onTimeout(() -> {
+			log.info("[录像回放] 等待超时 deviceId: {}, channelId: {}", deviceId, channelId);
+			WVPResult<StreamContent> timeoutResult = new WVPResult<>();
+			timeoutResult.setCode(ErrorCode.ERROR100.getCode());
+			timeoutResult.setMsg("回放超时");
+			result.setResult(timeoutResult);
+			requestMessage.setData(timeoutResult);
+			resultHolder.invokeResult(requestMessage);
+			try {
+				InviteInfo inviteInfo = inviteStreamService.getInviteInfoByDeviceAndChannel(
+						InviteSessionType.PLAYBACK, channel.getId());
+				if (inviteInfo != null) {
+					playService.stop(inviteInfo);
+				}
+			} catch (RuntimeException e) {
+				log.warn("[录像回放] 超时停止流程失败，deviceId={}, channelId={}: {}",
+						deviceId, channelId, e.getMessage());
+			}
+		});
 		playService.playBack(device, channel, startTime, endTime,
 				(code, msg, data)->{
 

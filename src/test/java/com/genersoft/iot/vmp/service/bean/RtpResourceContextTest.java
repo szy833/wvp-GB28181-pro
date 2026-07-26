@@ -73,6 +73,22 @@ class RtpResourceContextTest {
     }
 
     @Test
+    void closedOwnerIgnoresLateMediaArrival() {
+        AtomicInteger callbackCount = new AtomicInteger();
+        RtpResourceContext context = new RtpResourceContext(
+                "resource-1", "business-stream", "zlm-stream",
+                (code, msg, data) -> callbackCount.incrementAndGet(), () -> {});
+
+        assertTrue(context.transitionTo(RtpResourceState.WAITING_MEDIA));
+        assertTrue(context.close("http timeout"));
+
+        context.onMediaArrival(new HookData());
+
+        assertEquals(RtpResourceState.CLOSED, context.getState());
+        assertEquals(0, callbackCount.get());
+    }
+
+    @Test
     void lateTaskAndHookRegistrationIsImmediatelyRolledBack() {
         DynamicTask dynamicTask = mock(DynamicTask.class);
         HookSubscribe subscribe = mock(HookSubscribe.class);

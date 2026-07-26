@@ -311,6 +311,16 @@ public class ChannelController {
 
         DeferredResult<WVPResult<StreamContent>> result = new DeferredResult<>(userSetting.getPlayTimeout().longValue());
 
+        result.onTimeout(() -> {
+            log.info("[通用通道点播] 等待超时 channelId: {}", channelId);
+            result.setResult(WVPResult.fail(ErrorCode.ERROR100.getCode(), "点播超时"));
+            try {
+                channelPlayService.stopPlay(channel);
+            } catch (RuntimeException e) {
+                log.warn("[通用通道点播] 超时停止流程失败，channelId={}: {}", channelId, e.getMessage());
+            }
+        });
+
         ErrorCallback<StreamInfo> callback = (code, msg, streamInfo) -> {
             if (code == InviteErrorCode.SUCCESS.getCode()) {
                 WVPResult<StreamContent> wvpResult = WVPResult.success();
@@ -433,6 +443,16 @@ public class ChannelController {
         Assert.notNull(channel, "通道不存在");
 
         DeferredResult<WVPResult<StreamContent>> result = new DeferredResult<>(userSetting.getPlayTimeout().longValue());
+
+        result.onTimeout(() -> {
+            log.info("[通用通道回放] 等待超时 channelId: {}", channelId);
+            result.setResult(WVPResult.fail(ErrorCode.ERROR100.getCode(), "回放超时"));
+            try {
+                channelPlayService.stopPlayback(channel, null);
+            } catch (RuntimeException e) {
+                log.warn("[通用通道回放] 超时停止流程失败，channelId={}: {}", channelId, e.getMessage());
+            }
+        });
 
         ErrorCallback<StreamInfo> callback = (code, msg, streamInfo) -> {
             if (code == InviteErrorCode.SUCCESS.getCode()) {

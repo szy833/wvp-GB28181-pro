@@ -113,9 +113,13 @@ public class ApiStreamController {
             JSONObject resultJSON = new JSONObject();
             resultJSON.put("error","timeout");
             result.setResult(resultJSON);
-            inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, deviceChannel.getId());
-            deviceChannelService.stopPlay(deviceChannel.getId());
-            // 清理RTP server
+            String streamId = String.format("%s_%s", device.getDeviceId(), deviceChannel.getDeviceId());
+            try {
+                playService.stop(InviteSessionType.PLAY, device, deviceChannel, streamId);
+            } catch (RuntimeException e) {
+                log.warn("播放超时统一停止流程失败，deviceId={}, channelId={}: {}",
+                        serial, code, e.getMessage());
+            }
         });
 
         MediaServer newMediaServerItem = playService.getNewMediaServerItem(device);
