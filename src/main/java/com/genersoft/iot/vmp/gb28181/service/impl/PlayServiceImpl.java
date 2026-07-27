@@ -1337,6 +1337,9 @@ public class PlayServiceImpl implements IPlayService {
             return;
         }
         for (InviteInfo inviteInfo : inviteInfoList) {
+            if (inviteInfo.getStatus() != InviteSessionStatus.ok || inviteInfo.getStreamInfo() == null) {
+                continue;
+            }
             if (!mediaServer.getId().equals(resolveMediaServerId(inviteInfo))) {
                 continue;
             }
