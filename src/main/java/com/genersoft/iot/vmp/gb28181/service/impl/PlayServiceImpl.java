@@ -1031,8 +1031,11 @@ public class PlayServiceImpl implements IPlayService {
                                     , inviteInfo.getChannelId(), inviteInfo.getStream());
                             if (inviteInfoForNew != null && inviteInfoForNew.getStreamInfo() != null) {
                                 inviteInfoForNew.getStreamInfo().setDownLoadFilePath(downloadFileInfo);
-                                // 不可以马上移除会导致后续接口拿不到下载地址
-                                inviteStreamService.updateInviteInfo(inviteInfoForNew, 60*15L);
+                                // A record is retained only after the download reports completion.
+                                if (inviteInfoForNew.getStreamInfo().getProgress() >= 1.0) {
+                                    inviteInfoForNew.setCleanupAt(System.currentTimeMillis() + 15 * 60 * 1000L);
+                                }
+                                inviteStreamService.updateInviteInfo(inviteInfoForNew);
                             }
                         };
                         Hook hook = Hook.getInstance(HookType.on_record_mp4, MediaStreamUtil.RTP_APP, ssrcInfo.getStream(), mediaServer.getId());

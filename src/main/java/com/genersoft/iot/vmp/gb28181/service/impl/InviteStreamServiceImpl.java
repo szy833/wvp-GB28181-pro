@@ -14,8 +14,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -115,6 +118,9 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
             }
             if (inviteInfo.getStatus() != null) {
                 inviteInfoInRedis.setStatus(inviteInfo.getStatus());
+            }
+            if (inviteInfo.getCleanupAt() != null) {
+                inviteInfoInRedis.setCleanupAt(inviteInfo.getCleanupAt());
             }
 
             inviteInfoForUpdate = inviteInfoInRedis;
@@ -234,6 +240,54 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
     }
 
     @Override
+    public boolean removeInviteInfoIfSame(InviteInfo expected) {
+        if (expected == null || expected.getType() == null || expected.getChannelId() == null
+                || expected.getStream() == null) {
+            return false;
+        }
+        String key = VideoManagerConstants.INVITE_PREFIX;
+        String objectKey = expected.getType() + ":" + expected.getChannelId() + ":" + expected.getStream();
+        try {
+            Boolean removed = redisTemplate.execute(new SessionCallback<>() {
+                @Override
+                @SuppressWarnings("unchecked")
+                public Boolean execute(RedisOperations operations) {
+                    operations.watch(key);
+                    Object current = operations.opsForHash().get(key, objectKey);
+                    if (!(current instanceof InviteInfo currentInvite) || !sameOwner(currentInvite, expected)) {
+                        operations.unwatch();
+                        return false;
+                    }
+                    operations.multi();
+                    operations.opsForHash().delete(key, objectKey);
+                    List<Object> results = operations.exec();
+                    return results != null && !results.isEmpty() && toLong(results.get(0)) > 0;
+                }
+            });
+            return Boolean.TRUE.equals(removed);
+        } catch (Exception e) {
+            log.warn("[Redis-InviteInfo] 条件删除失败，保留数据：key={}, field={}", key, objectKey, e);
+            return false;
+        }
+    }
+
+    private boolean sameOwner(InviteInfo current, InviteInfo expected) {
+        String currentOwner = current.getSsrcInfo() == null ? null : current.getSsrcInfo().getResourceId();
+        String expectedOwner = expected.getSsrcInfo() == null ? null : expected.getSsrcInfo().getResourceId();
+        if (currentOwner != null || expectedOwner != null) {
+            return currentOwner != null && currentOwner.equals(expectedOwner);
+        }
+        return Objects.equals(current, expected);
+    }
+
+    private long toLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return 0;
+    }
+
+    @Override
     public void once(InviteSessionType type, Integer channelId, String stream, ErrorCallback<StreamInfo> callback) {
         String key = buildKey(type, channelId, stream);
         List<ErrorCallback<StreamInfo>> callbacks = inviteErrorCallbackMap.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>());
@@ -343,41 +397,48 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
     @Scheduled(fixedRate = 10000)   //定时检测,清理错误的redis数据,防止因为错误数据导致的点播不可用
     public void execute(){
         String key = VideoManagerConstants.INVITE_PREFIX;
-        if(redisTemplate.opsForHash().size(key) == 0) {
+        List<Object> values;
+        try {
+            if(redisTemplate.opsForHash().size(key) == 0) {
+                return;
+            }
+            values = redisTemplate.opsForHash().values(key);
+        } catch (Exception e) {
+            log.error("[定时清理Invite] Redis读取失败，保留所有数据", e);
             return;
         }
-        List<Object> values = redisTemplate.opsForHash().values(key);
+        if (values == null || values.isEmpty()) {
+            return;
+        }
         for (Object value : values) {
+            if (!(value instanceof InviteInfo inviteInfo)) {
+                log.warn("[定时清理Invite] 跳过未知数据类型：{}", value);
+                continue;
+            }
             try {
-                InviteInfo inviteInfo = (InviteInfo)value;
+                if (inviteInfo.getType() == InviteSessionType.DOWNLOAD
+                        && inviteInfo.getStreamInfo() != null
+                        && inviteInfo.getStreamInfo().getProgress() >= 1
+                        && inviteInfo.getCleanupAt() != null) {
+                    if (System.currentTimeMillis() >= inviteInfo.getCleanupAt()) {
+                        removeInviteInfoIfSame(inviteInfo);
+                    }
+                    continue;
+                }
                 if (inviteInfo.getStreamInfo() != null) {
                     continue;
                 }
                 if (inviteInfo.getCreateTime() == null || inviteInfo.getExpirationTime() == null) {
-                    removeInviteInfo(inviteInfo);
+                    removeInviteInfoIfSame(inviteInfo);
                     continue;
                 }
                 long time = inviteInfo.getCreateTime() + inviteInfo.getExpirationTime();
-                if (System.currentTimeMillis() > time) {
-                    removeInviteInfo(inviteInfo);
+                if (System.currentTimeMillis() >= time) {
+                    removeInviteInfoIfSame(inviteInfo);
                 }
             } catch (Exception e) {
-                log.error("[定时清理Invite] 处理异常，尝试删除该数据: {}", value, e);
-                removeInviteInfoByValue(value);
+                log.error("[定时清理Invite] 处理异常，保留该数据: {}", value, e);
             }
-        }
-    }
-
-    private void removeInviteInfoByValue(Object value) {
-        if (value instanceof InviteInfo) {
-            removeInviteInfo((InviteInfo) value);
-        } else {
-            String key = VideoManagerConstants.INVITE_PREFIX;
-            redisTemplate.opsForHash().entries(key).forEach((k, v) -> {
-                if (v.equals(value)) {
-                    redisTemplate.opsForHash().delete(key, k);
-                }
-            });
         }
     }
 }

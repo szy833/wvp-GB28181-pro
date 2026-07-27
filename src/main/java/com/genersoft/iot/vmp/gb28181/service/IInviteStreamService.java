@@ -34,6 +34,11 @@ public interface IInviteStreamService {
      * 移除点播的状态信息
      */
     void removeInviteInfo(InviteInfo inviteInfo);
+
+    /**
+     * Removes an InviteInfo only when the Redis hash still contains the expected owner.
+     */
+    boolean removeInviteInfoIfSame(InviteInfo expected);
     /**
      * 移除点播的状态信息
      */

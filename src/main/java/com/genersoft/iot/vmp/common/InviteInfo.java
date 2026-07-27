@@ -35,6 +35,11 @@ public class InviteInfo {
 
     private Long createTime;
 
+    /**
+     * Absolute deadline for retaining a completed download's metadata.
+     */
+    private Long cleanupAt;
+
 
     public static InviteInfo getInviteInfo(String deviceId, Integer channelId, String stream, SSRCInfo ssrcInfo, String mediaServerId,
                                            String receiveIp, Integer receivePort, String streamMode,
