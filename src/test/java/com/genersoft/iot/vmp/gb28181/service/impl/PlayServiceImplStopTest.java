@@ -13,6 +13,8 @@ import com.genersoft.iot.vmp.gb28181.service.IDeviceService;
 import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
 import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommander;
+import com.genersoft.iot.vmp.media.bean.MediaServer;
+import com.genersoft.iot.vmp.media.service.IMediaServerService;
 import com.genersoft.iot.vmp.service.IReceiveRtpServerService;
 import com.genersoft.iot.vmp.service.bean.SSRCInfo;
 import org.junit.jupiter.api.Test;
@@ -72,6 +74,43 @@ class PlayServiceImplStopTest {
         assertFalse(service.stopIfOwner(invite));
 
         verifyNoInteractions(rtp);
+    }
+
+    @Test
+    void stopIfOwnerRestoresInviteWhenResourceCleanupFails() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        InviteInfo invite = invite(device(), channel());
+        when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
+        doThrow(new IllegalStateException("rtp close failed")).when(rtp).closeRTPServer(invite.getSsrcInfo());
+
+        assertFalse(service.stopIfOwner(invite));
+
+        verify(invites).restoreInviteInfoIfAbsent(invite);
+    }
+
+    @Test
+    void mediaServerOnlineUsesOwnerCleanupForMissingRtp() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        IMediaServerService mediaServers = mock(IMediaServerService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        ReflectionTestUtils.setField(service, "mediaServerService", mediaServers);
+        InviteInfo invite = invite(device(), channel());
+        MediaServer mediaServer = new MediaServer();
+        mediaServer.setId("media-1");
+        mediaServer.setRtpEnable(true);
+        when(invites.getAllInviteInfo()).thenReturn(java.util.List.of(invite));
+        when(mediaServers.listRtpServer(mediaServer)).thenReturn(java.util.List.of());
+        when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
+
+        service.zlmServerOnline(mediaServer);
+
+        verify(invites).removeInviteInfoIfSame(invite);
+        verify(rtp).closeRTPServer(invite.getSsrcInfo());
     }
 
     @Test

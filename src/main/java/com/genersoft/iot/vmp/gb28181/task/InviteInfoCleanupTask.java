@@ -49,7 +49,8 @@ public class InviteInfoCleanupTask {
         Map<String, List<InviteInfo>> byMediaServer = new HashMap<>();
         for (InviteInfo inviteInfo : snapshot) {
             if (inviteInfo == null || inviteInfo.getStatus() != InviteSessionStatus.ok
-                    || inviteInfo.getStreamInfo() == null) {
+                    || inviteInfo.getStreamInfo() == null || !isReconciliableType(inviteInfo)
+                    || !hasReliableOwner(inviteInfo)) {
                 continue;
             }
             String mediaServerId = resolveMediaServerId(inviteInfo);
@@ -61,9 +62,19 @@ public class InviteInfoCleanupTask {
         }
 
         for (Map.Entry<String, List<InviteInfo>> entry : byMediaServer.entrySet()) {
-            MediaServer mediaServer = mediaServerService.getOne(entry.getKey());
+            MediaServer mediaServer;
+            try {
+                mediaServer = mediaServerService.getOne(entry.getKey());
+            } catch (RuntimeException e) {
+                log.warn("[Invite孤儿校验] 查询媒体节点失败，跳过：{}", entry.getKey(), e);
+                continue;
+            }
             if (mediaServer == null) {
                 log.debug("[Invite孤儿校验] 未找到媒体节点：{}", entry.getKey());
+                continue;
+            }
+            if (!mediaServer.isRtpEnable()) {
+                log.debug("[Invite孤儿校验] 媒体节点为单端口模式，跳过RTP监听对账：{}", entry.getKey());
                 continue;
             }
             List<String> rtpStreams;
@@ -105,16 +116,24 @@ public class InviteInfoCleanupTask {
     }
 
     private String resolveActualRtpStream(InviteInfo inviteInfo) {
-        if (inviteInfo.getSsrcInfo() != null && inviteInfo.getSsrcInfo().getZlmStream() != null) {
+        if (hasReliableOwner(inviteInfo)) {
             return inviteInfo.getSsrcInfo().getZlmStream();
         }
-        if (inviteInfo.getStreamInfo().getStream() != null) {
-            return inviteInfo.getStreamInfo().getStream();
-        }
-        if (inviteInfo.getSsrcInfo() == null || inviteInfo.getSsrcInfo().getZlmStream() == null) {
-            return inviteInfo.getStream();
-        }
         return null;
+    }
+
+    private boolean isReconciliableType(InviteInfo inviteInfo) {
+        return inviteInfo.getType() == InviteSessionType.PLAY
+                || inviteInfo.getType() == InviteSessionType.PLAYBACK
+                || inviteInfo.getType() == InviteSessionType.DOWNLOAD;
+    }
+
+    private boolean hasReliableOwner(InviteInfo inviteInfo) {
+        return inviteInfo.getSsrcInfo() != null
+                && inviteInfo.getSsrcInfo().getResourceId() != null
+                && !inviteInfo.getSsrcInfo().getResourceId().isEmpty()
+                && inviteInfo.getSsrcInfo().getZlmStream() != null
+                && !inviteInfo.getSsrcInfo().getZlmStream().isEmpty();
     }
 
     private boolean isCompletedDownloadRetained(InviteInfo inviteInfo) {

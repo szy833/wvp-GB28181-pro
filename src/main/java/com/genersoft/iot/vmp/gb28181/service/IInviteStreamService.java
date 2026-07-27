@@ -39,6 +39,11 @@ public interface IInviteStreamService {
      * Removes an InviteInfo only when the Redis hash still contains the expected owner.
      */
     boolean removeInviteInfoIfSame(InviteInfo expected);
+
+    /**
+     * Restores an owner snapshot only when its Redis hash field is still absent.
+     */
+    boolean restoreInviteInfoIfAbsent(InviteInfo inviteInfo);
     /**
      * 移除点播的状态信息
      */

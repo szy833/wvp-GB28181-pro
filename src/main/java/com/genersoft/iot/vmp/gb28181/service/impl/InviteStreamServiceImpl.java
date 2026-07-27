@@ -271,6 +271,23 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
         }
     }
 
+    @Override
+    public boolean restoreInviteInfoIfAbsent(InviteInfo inviteInfo) {
+        if (inviteInfo == null || inviteInfo.getType() == null || inviteInfo.getChannelId() == null
+                || inviteInfo.getStream() == null) {
+            return false;
+        }
+        String key = VideoManagerConstants.INVITE_PREFIX;
+        String objectKey = inviteInfo.getType() + ":" + inviteInfo.getChannelId() + ":" + inviteInfo.getStream();
+        try {
+            Boolean restored = redisTemplate.opsForHash().putIfAbsent(key, objectKey, inviteInfo);
+            return Boolean.TRUE.equals(restored);
+        } catch (RuntimeException e) {
+            log.warn("[Redis-InviteInfo] 清理失败后恢复记录异常：key={}, field={}", key, objectKey, e);
+            return false;
+        }
+    }
+
     private boolean sameOwner(InviteInfo current, InviteInfo expected) {
         String currentOwner = current.getSsrcInfo() == null ? null : current.getSsrcInfo().getResourceId();
         String expectedOwner = expected.getSsrcInfo() == null ? null : expected.getSsrcInfo().getResourceId();

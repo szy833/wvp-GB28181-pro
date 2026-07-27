@@ -48,12 +48,29 @@ class PlayServiceImplDownloadCleanupTest {
     }
 
     @Test
-    void recordHookDoesNotSetDeadlineBeforeDownloadCompletes() throws Exception {
+    void recordHookMarksCompletionWhenProgressWasNotPolledYet() throws Exception {
         Fixture fixture = fixture(0.5);
 
         fixture.invokeDownloadAndRecordHook();
 
-        assertNull(fixture.invite.getCleanupAt());
+        assertEquals(1.0, fixture.invite.getStreamInfo().getProgress());
+        assertNotNull(fixture.invite.getCleanupAt());
+    }
+
+    @Test
+    void progressPollThatReachesCompletionSetsRetentionDeadline() {
+        Fixture fixture = fixture(0.5);
+        fixture.invite.getStreamInfo().setStartTime("2026-07-27 00:00:00");
+        fixture.invite.getStreamInfo().setEndTime("2026-07-27 00:01:00");
+        fixture.invite.getStreamInfo().setMediaServer(fixture.mediaServer);
+        when(fixture.media.updateDownloadProcess(fixture.mediaServer, "rtp", "stream-1"))
+                .thenReturn(60_000L);
+        long before = System.currentTimeMillis();
+
+        fixture.service.getDownLoadInfo(fixture.device, fixture.channel, "stream-1");
+
+        assertNotNull(fixture.invite.getCleanupAt());
+        assertTrue(fixture.invite.getCleanupAt() >= before + 15 * 60 * 1000L);
     }
 
     @Test
@@ -130,7 +147,7 @@ class PlayServiceImplDownloadCleanupTest {
         ReflectionTestUtils.setField(service, "userSetting", settings);
         ReflectionTestUtils.setField(service, "sessionManager", sessions);
         ReflectionTestUtils.setField(service, "cloudRecordService", cloudRecord);
-        return new Fixture(service, mediaServer, device, channel, invites, invite, file, hookEvent, okEvent);
+        return new Fixture(service, mediaServer, device, channel, invites, media, invite, file, hookEvent, okEvent);
     }
 
     private static InviteInfo invite(InviteSessionStatus status, double progress) {
@@ -145,6 +162,7 @@ class PlayServiceImplDownloadCleanupTest {
 
     private record Fixture(PlayServiceImpl service, MediaServer mediaServer, Device device,
                            DeviceChannel channel, IInviteStreamService invites,
+                           IMediaServerService media,
                            InviteInfo invite, DownloadFileInfo file,
                            AtomicReference<HookSubscribe.Event> hookEvent,
                            AtomicReference<SipSubscribe.Event> okEvent) {

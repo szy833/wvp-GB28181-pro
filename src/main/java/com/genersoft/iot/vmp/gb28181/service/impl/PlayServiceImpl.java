@@ -68,6 +68,8 @@ import java.util.Vector;
 @Service("playService")
 public class PlayServiceImpl implements IPlayService {
 
+    private static final long DOWNLOAD_CLEANUP_RETENTION_MILLIS = 15 * 60 * 1000L;
+
     @Autowired
     private ISIPCommander cmder;
 
@@ -1031,9 +1033,11 @@ public class PlayServiceImpl implements IPlayService {
                                     , inviteInfo.getChannelId(), inviteInfo.getStream());
                             if (inviteInfoForNew != null && inviteInfoForNew.getStreamInfo() != null) {
                                 inviteInfoForNew.getStreamInfo().setDownLoadFilePath(downloadFileInfo);
-                                // A record is retained only after the download reports completion.
-                                if (inviteInfoForNew.getStreamInfo().getProgress() >= 1.0) {
-                                    inviteInfoForNew.setCleanupAt(System.currentTimeMillis() + 15 * 60 * 1000L);
+                                // on_record_mp4 is the completion signal for this download.
+                                if (downloadFileInfo != null) {
+                                    inviteInfoForNew.getStreamInfo().setProgress(1.0);
+                                    inviteInfoForNew.setCleanupAt(System.currentTimeMillis()
+                                            + DOWNLOAD_CLEANUP_RETENTION_MILLIS);
                                 }
                                 inviteStreamService.updateInviteInfo(inviteInfoForNew);
                             }
@@ -1090,7 +1094,11 @@ public class PlayServiceImpl implements IPlayService {
             return null;
         }
 
-        if (inviteInfo.getStreamInfo().getProgress() == 1) {
+        if (inviteInfo.getStreamInfo().getProgress() >= 1) {
+            if (inviteInfo.getCleanupAt() == null) {
+                inviteInfo.setCleanupAt(System.currentTimeMillis() + DOWNLOAD_CLEANUP_RETENTION_MILLIS);
+                inviteStreamService.updateInviteInfo(inviteInfo);
+            }
             return inviteInfo.getStreamInfo();
         }
 
@@ -1117,6 +1125,9 @@ public class PlayServiceImpl implements IPlayService {
             double process = divide.doubleValue();
             if (process > 0.999) {
                 process = 1.0;
+                if (inviteInfo.getCleanupAt() == null) {
+                    inviteInfo.setCleanupAt(System.currentTimeMillis() + DOWNLOAD_CLEANUP_RETENTION_MILLIS);
+                }
             }
             inviteInfo.getStreamInfo().setProgress(process);
         }
@@ -1327,17 +1338,29 @@ public class PlayServiceImpl implements IPlayService {
         if (mediaServer == null || mediaServer.getId() == null) {
             return;
         }
+        if (!mediaServer.isRtpEnable()) {
+            return;
+        }
         List<InviteInfo> inviteInfoList = inviteStreamService.getAllInviteInfo();
-        if (inviteInfoList.isEmpty()) {
+        if (inviteInfoList == null || inviteInfoList.isEmpty()) {
             return;
         }
 
-        List<String> rtpServerList = mediaServerService.listRtpServer(mediaServer);
+        List<String> rtpServerList;
+        try {
+            rtpServerList = mediaServerService.listRtpServer(mediaServer);
+        } catch (RuntimeException e) {
+            log.warn("[媒体节点上线] 查询RTP监听失败，跳过清理：{}", mediaServer.getId(), e);
+            return;
+        }
         if (rtpServerList == null) {
             return;
         }
         for (InviteInfo inviteInfo : inviteInfoList) {
             if (inviteInfo.getStatus() != InviteSessionStatus.ok || inviteInfo.getStreamInfo() == null) {
+                continue;
+            }
+            if (!isReconciliableType(inviteInfo) || !hasReliableOwner(inviteInfo)) {
                 continue;
             }
             if (!mediaServer.getId().equals(resolveMediaServerId(inviteInfo))) {
@@ -1348,7 +1371,7 @@ public class PlayServiceImpl implements IPlayService {
             }
             String streamKey = resolveActualRtpStream(inviteInfo);
             if (streamKey != null && !rtpServerList.contains(streamKey)) {
-                inviteStreamService.removeInviteInfoIfSame(inviteInfo);
+                stopIfOwner(inviteInfo);
             }
         }
     }
@@ -1364,17 +1387,24 @@ public class PlayServiceImpl implements IPlayService {
     }
 
     private String resolveActualRtpStream(InviteInfo inviteInfo) {
-        if (inviteInfo.getSsrcInfo() != null && inviteInfo.getSsrcInfo().getZlmStream() != null) {
+        if (hasReliableOwner(inviteInfo)) {
             return inviteInfo.getSsrcInfo().getZlmStream();
         }
-        if (inviteInfo.getStreamInfo() != null && inviteInfo.getStreamInfo().getStream() != null) {
-            return inviteInfo.getStreamInfo().getStream();
-        }
-        if ((inviteInfo.getSsrcInfo() == null || inviteInfo.getSsrcInfo().getZlmStream() == null)
-                && (inviteInfo.getStreamInfo() == null || inviteInfo.getStreamInfo().getStream() == null)) {
-            return inviteInfo.getStream();
-        }
         return null;
+    }
+
+    private boolean isReconciliableType(InviteInfo inviteInfo) {
+        return inviteInfo.getType() == InviteSessionType.PLAY
+                || inviteInfo.getType() == InviteSessionType.PLAYBACK
+                || inviteInfo.getType() == InviteSessionType.DOWNLOAD;
+    }
+
+    private boolean hasReliableOwner(InviteInfo inviteInfo) {
+        return inviteInfo.getSsrcInfo() != null
+                && inviteInfo.getSsrcInfo().getResourceId() != null
+                && !inviteInfo.getSsrcInfo().getResourceId().isEmpty()
+                && inviteInfo.getSsrcInfo().getZlmStream() != null
+                && !inviteInfo.getSsrcInfo().getZlmStream().isEmpty();
     }
 
     private boolean isCompletedDownloadRetained(InviteInfo inviteInfo) {
@@ -1784,8 +1814,15 @@ public class PlayServiceImpl implements IPlayService {
                 log.warn("[条件停止点播] 查询设备失败，继续清理本地资源: {}", e.getMessage());
             }
         }
-        stopInviteResourcesAfterRemoval(expected, device, channel, expected.getStream());
-        return true;
+        boolean cleaned = stopInviteResourcesAfterRemoval(expected, device, channel, expected.getStream());
+        if (!cleaned) {
+            try {
+                inviteStreamService.restoreInviteInfoIfAbsent(expected);
+            } catch (RuntimeException e) {
+                log.warn("[条件停止点播] 清理失败后恢复Invite异常: {}", e.getMessage());
+            }
+        }
+        return cleaned;
     }
 
     private void stopInviteResources(InviteInfo inviteInfo, Device device, DeviceChannel channel,
@@ -1794,8 +1831,9 @@ public class PlayServiceImpl implements IPlayService {
         stopInviteResourcesAfterRemoval(inviteInfo, device, channel, fallbackStream);
     }
 
-    private void stopInviteResourcesAfterRemoval(InviteInfo inviteInfo, Device device, DeviceChannel channel,
-                                                  String fallbackStream) {
+    private boolean stopInviteResourcesAfterRemoval(InviteInfo inviteInfo, Device device, DeviceChannel channel,
+                                                     String fallbackStream) {
+        boolean cleaned = true;
         String stream = inviteInfo.getStream();
         if (stream == null && inviteInfo.getStreamInfo() != null) {
             stream = inviteInfo.getStreamInfo().getStream();
@@ -1805,16 +1843,17 @@ public class PlayServiceImpl implements IPlayService {
         }
         if (InviteSessionStatus.ok == inviteInfo.getStatus() && device != null && channel != null
                 && stream != null) {
-            safeSendBye(device, channel, stream);
+            cleaned &= safeSendBye(device, channel, stream);
         }
         if (inviteInfo.getType() == InviteSessionType.PLAY) {
             Integer channelId = channel == null ? inviteInfo.getChannelId() : channel.getId();
             if (channelId != null) {
-                stopPlayState(channelId);
+                cleaned &= stopPlayState(channelId);
             }
         }
-        removeOwnedSipSession(inviteInfo, fallbackStream);
-        closeInviteRtp(inviteInfo, fallbackStream);
+        cleaned &= removeOwnedSipSession(inviteInfo, fallbackStream);
+        cleaned &= closeInviteRtp(inviteInfo, fallbackStream);
+        return cleaned;
     }
 
     private void safeRemoveInviteInfo(InviteInfo inviteInfo) {
@@ -1825,26 +1864,31 @@ public class PlayServiceImpl implements IPlayService {
         }
     }
 
-    private void safeSendBye(Device device, DeviceChannel channel, String stream) {
+    private boolean safeSendBye(Device device, DeviceChannel channel, String stream) {
         try {
             log.info("[停止点播/回放/下载] 成功 {}/{}", device.getDeviceId(), channel.getDeviceId());
             cmder.streamByeCmd(device, channel.getDeviceId(), MediaStreamUtil.RTP_APP, stream, null, null);
+            return true;
         } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
             log.warn("[命令发送失败] 停止点播/回放/下载，发送BYE: {}", e.getMessage());
+            return false;
         } catch (RuntimeException e) {
             log.warn("[命令发送失败] 停止点播/回放/下载，BYE运行时异常: {}", e.getMessage());
+            return false;
         }
     }
 
-    private void stopPlayState(Integer channelId) {
+    private boolean stopPlayState(Integer channelId) {
         try {
             deviceChannelService.stopPlay(channelId);
+            return true;
         } catch (RuntimeException e) {
             log.warn("[停止点播] 重置播放状态失败，继续清理资源: {}", e.getMessage());
+            return false;
         }
     }
 
-    private void removeOwnedSipSession(InviteInfo inviteInfo, String fallbackStream) {
+    private boolean removeOwnedSipSession(InviteInfo inviteInfo, String fallbackStream) {
         String app = MediaStreamUtil.RTP_APP;
         String stream = inviteInfo.getStream() == null ? fallbackStream : inviteInfo.getStream();
         SSRCInfo ssrcInfo = inviteInfo.getSsrcInfo();
@@ -1864,15 +1908,17 @@ public class PlayServiceImpl implements IPlayService {
             }
         }
         if (stream == null) {
-            return;
+            return true;
         }
         try {
             SsrcTransaction current = sessionManager.getSsrcTransactionByStream(app, stream);
             if (current != null && isOwnedSession(inviteInfo, current)) {
                 sessionManager.removeByStream(app, stream);
             }
+            return true;
         } catch (RuntimeException e) {
             log.warn("[停止点播] 删除SIP session失败，继续清理RTP: {}", e.getMessage());
+            return false;
         }
     }
 
@@ -1894,7 +1940,7 @@ public class PlayServiceImpl implements IPlayService {
                 || ssrcInfo.getSsrc().equals(transaction.getSsrc());
     }
 
-    private void closeInviteRtp(InviteInfo inviteInfo, String fallbackStream) {
+    private boolean closeInviteRtp(InviteInfo inviteInfo, String fallbackStream) {
         try {
             if (inviteInfo.getSsrcInfo() != null) {
                 receiveRtpServerService.closeRTPServer(inviteInfo.getSsrcInfo());
@@ -1912,8 +1958,10 @@ public class PlayServiceImpl implements IPlayService {
                     receiveRtpServerService.closeRTPServer(inviteInfo.getStreamInfo().getMediaServer(), app, stream);
                 }
             }
+            return true;
         } catch (RuntimeException e) {
             log.warn("[停止点播] 关闭RTP资源失败: {}", e.getMessage());
+            return false;
         }
     }
 

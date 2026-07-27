@@ -116,6 +116,22 @@ class InviteStreamServiceImplTest {
     }
 
     @Test
+    void restoreInviteInfoOnlyWritesWhenFieldIsAbsent() {
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        HashOperations<String, Object, Object> hash = mock(HashOperations.class);
+        when(redis.opsForHash()).thenReturn(hash);
+        InviteInfo invite = invite(InviteSessionType.PLAY, InviteSessionStatus.ok);
+        when(hash.putIfAbsent(eq(VideoManagerConstants.INVITE_PREFIX), anyString(), eq(invite)))
+                .thenReturn(true);
+        InviteStreamServiceImpl service = new InviteStreamServiceImpl();
+        ReflectionTestUtils.setField(service, "redisTemplate", redis);
+
+        assertTrue(service.restoreInviteInfoIfAbsent(invite));
+
+        verify(hash).putIfAbsent(eq(VideoManagerConstants.INVITE_PREFIX), anyString(), eq(invite));
+    }
+
+    @Test
     void nonReadyUpdatePreservesCleanupAtWhenIncomingFieldIsNull() {
         InviteInfo existing = invite(InviteSessionType.DOWNLOAD, InviteSessionStatus.ok);
         existing.setCleanupAt(1_725_000_123_456L);

@@ -40,6 +40,39 @@ class InviteInfoCleanupTaskTest {
     }
 
     @Test
+    void singlePortNodeDoesNotUseRtpListenerListForLiveness() {
+        InviteInfo invite = invite("media-1", "business-stream", "business-stream");
+        Fixture fixture = fixture(invite, List.of());
+        fixture.mediaServer.setRtpEnable(false);
+
+        fixture.task.execute();
+
+        verifyNoInteractions(fixture.playService);
+    }
+
+    @Test
+    void broadcastInviteIsNotReconciledByDevicePlaybackCleaner() {
+        InviteInfo invite = invite("media-1", "business-stream", "zlm-stream");
+        invite.setType(InviteSessionType.BROADCAST);
+        Fixture fixture = fixture(invite, List.of());
+
+        fixture.task.execute();
+
+        verifyNoInteractions(fixture.playService);
+    }
+
+    @Test
+    void legacyInviteWithoutOwnerAwareZlmStreamIsRetained() {
+        InviteInfo invite = invite("media-1", "business-stream", null);
+        invite.getSsrcInfo().setResourceId(null);
+        Fixture fixture = fixture(invite, List.of());
+
+        fixture.task.execute();
+
+        verifyNoInteractions(fixture.playService);
+    }
+
+    @Test
     void failedQueryDoesNotStopAnything() {
         InviteInfo invite = invite("media-1", "business-stream", "zlm-stream");
         Fixture fixture = fixture(invite, null);
@@ -79,6 +112,29 @@ class InviteInfoCleanupTaskTest {
         verify(fixture.playService, never()).stopIfOwner(second);
     }
 
+    @Test
+    void mediaServerLookupFailureDoesNotAbortOtherNodes() {
+        InviteInfo first = invite("media-1", "business-1", "zlm-1");
+        InviteInfo second = invite("media-2", "business-2", "zlm-2");
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IMediaServerService mediaServers = mock(IMediaServerService.class);
+        IPlayService playService = mock(IPlayService.class);
+        InviteInfoCleanupTask task = new InviteInfoCleanupTask();
+        ReflectionTestUtils.setField(task, "inviteStreamService", invites);
+        ReflectionTestUtils.setField(task, "mediaServerService", mediaServers);
+        ReflectionTestUtils.setField(task, "playService", playService);
+        when(invites.getAllInviteInfo()).thenReturn(List.of(first, second));
+        when(mediaServers.getOne("media-1")).thenThrow(new IllegalStateException("redis unavailable"));
+        MediaServer secondServer = server("media-2");
+        secondServer.setRtpEnable(true);
+        when(mediaServers.getOne("media-2")).thenReturn(secondServer);
+        when(mediaServers.listRtpServer(secondServer)).thenReturn(List.of());
+
+        task.execute();
+
+        verify(playService).stopIfOwner(second);
+    }
+
     private static Fixture fixture(InviteInfo invite, List<String> rtpStreams) {
         IInviteStreamService invites = mock(IInviteStreamService.class);
         IMediaServerService mediaServers = mock(IMediaServerService.class);
@@ -89,13 +145,15 @@ class InviteInfoCleanupTaskTest {
         ReflectionTestUtils.setField(task, "playService", playService);
         when(invites.getAllInviteInfo()).thenReturn(List.of(invite));
         MediaServer mediaServer = server(invite.getMediaServerId());
+        mediaServer.setRtpEnable(true);
         when(mediaServers.getOne(invite.getMediaServerId())).thenReturn(mediaServer);
         when(mediaServers.listRtpServer(mediaServer)).thenReturn(rtpStreams);
-        return new Fixture(task, invites, mediaServers, playService);
+        return new Fixture(task, invites, mediaServers, playService, mediaServer);
     }
 
     private static InviteInfo invite(String mediaServerId, String businessStream, String zlmStream) {
         SSRCInfo ssrcInfo = new SSRCInfo(1234, "0001", "rtp", businessStream);
+        ssrcInfo.setResourceId("resource-1");
         ssrcInfo.setZlmStream(zlmStream);
         InviteInfo invite = InviteInfo.getInviteInfo("device-1", 1, businessStream, ssrcInfo,
                 mediaServerId, "127.0.0.1", 1234, "UDP", InviteSessionType.PLAY, InviteSessionStatus.ok);
@@ -110,6 +168,7 @@ class InviteInfoCleanupTaskTest {
     }
 
     private record Fixture(InviteInfoCleanupTask task, IInviteStreamService invites,
-                           IMediaServerService mediaServers, IPlayService playService) {
+                           IMediaServerService mediaServers, IPlayService playService,
+                           MediaServer mediaServer) {
     }
 }
