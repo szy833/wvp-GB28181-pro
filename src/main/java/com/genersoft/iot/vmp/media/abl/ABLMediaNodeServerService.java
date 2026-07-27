@@ -445,7 +445,16 @@ public class ABLMediaNodeServerService implements IMediaNodeServerService {
 
     @Override
     public List<String> listRtpServer(MediaServer mediaServer) {
-        ABLResult ablResult = ablresTfulUtils.getMediaList(mediaServer, null, null);
+        ABLResult ablResult;
+        try {
+            ablResult = ablresTfulUtils.getMediaList(mediaServer, null, null);
+        } catch (RuntimeException e) {
+            log.warn("[ABL] 查询媒体列表失败", e);
+            return null;
+        }
+        if (ablResult == null) {
+            return null;
+        }
         if (ablResult.getCode() != 0) {
             return null;
         }

@@ -72,6 +72,11 @@ public interface IPlayService {
 
     void stop(InviteInfo inviteInfo);
 
+    /**
+     * Stops a session only if the expected InviteInfo still owns its Redis slot.
+     */
+    boolean stopIfOwner(InviteInfo expected);
+
     void play(CommonGBChannel channel, Boolean record, ErrorCallback<StreamInfo> callback);
 
     void stopPlay(InviteSessionType inviteSessionType, CommonGBChannel channel);

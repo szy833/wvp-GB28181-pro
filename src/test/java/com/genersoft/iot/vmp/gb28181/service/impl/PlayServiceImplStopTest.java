@@ -19,6 +19,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -26,6 +28,51 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class PlayServiceImplStopTest {
+
+    @Test
+    void stopIfOwnerCleansResourcesAfterClaimingCurrentOwner() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        InviteInfo invite = invite(device(), channel());
+        when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
+
+        assertTrue(service.stopIfOwner(invite));
+
+        verify(invites).removeInviteInfoIfSame(invite);
+        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+    }
+
+    @Test
+    void stopIfOwnerDoesNotTouchReplacementOwner() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        ISIPCommander commander = mock(ISIPCommander.class);
+        SipInviteSessionManager sessions = mock(SipInviteSessionManager.class);
+        PlayServiceImpl service = service(invites, commander, mock(IDeviceChannelService.class), rtp,
+                mock(UserSetting.class), sessions);
+        InviteInfo invite = invite(device(), channel());
+        when(invites.removeInviteInfoIfSame(invite)).thenReturn(false);
+
+        assertFalse(service.stopIfOwner(invite));
+
+        verifyNoInteractions(rtp, commander, sessions);
+    }
+
+    @Test
+    void stopIfOwnerSkipsResourcesWhenCompareDeleteFails() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        InviteInfo invite = invite(device(), channel());
+        when(invites.removeInviteInfoIfSame(invite)).thenThrow(new IllegalStateException("redis failed"));
+
+        assertFalse(service.stopIfOwner(invite));
+
+        verifyNoInteractions(rtp);
+    }
 
     @Test
     void byeRuntimeExceptionStillClosesRtp() throws Exception {

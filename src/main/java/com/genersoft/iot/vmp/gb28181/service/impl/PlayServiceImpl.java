@@ -1324,21 +1324,62 @@ public class PlayServiceImpl implements IPlayService {
 
     @Override
     public void zlmServerOnline(MediaServer mediaServer) {
-        // 获取
+        if (mediaServer == null || mediaServer.getId() == null) {
+            return;
+        }
         List<InviteInfo> inviteInfoList = inviteStreamService.getAllInviteInfo();
         if (inviteInfoList.isEmpty()) {
             return;
         }
 
         List<String> rtpServerList = mediaServerService.listRtpServer(mediaServer);
-        if (rtpServerList.isEmpty()) {
+        if (rtpServerList == null) {
             return;
         }
         for (InviteInfo inviteInfo : inviteInfoList) {
-            if (!rtpServerList.contains(inviteInfo.getStream())){
-                inviteStreamService.removeInviteInfo(inviteInfo);
+            if (!mediaServer.getId().equals(resolveMediaServerId(inviteInfo))) {
+                continue;
+            }
+            if (isCompletedDownloadRetained(inviteInfo)) {
+                continue;
+            }
+            String streamKey = resolveActualRtpStream(inviteInfo);
+            if (streamKey != null && !rtpServerList.contains(streamKey)) {
+                inviteStreamService.removeInviteInfoIfSame(inviteInfo);
             }
         }
+    }
+
+    private String resolveMediaServerId(InviteInfo inviteInfo) {
+        if (inviteInfo.getMediaServerId() != null) {
+            return inviteInfo.getMediaServerId();
+        }
+        if (inviteInfo.getStreamInfo() != null && inviteInfo.getStreamInfo().getMediaServer() != null) {
+            return inviteInfo.getStreamInfo().getMediaServer().getId();
+        }
+        return null;
+    }
+
+    private String resolveActualRtpStream(InviteInfo inviteInfo) {
+        if (inviteInfo.getSsrcInfo() != null && inviteInfo.getSsrcInfo().getZlmStream() != null) {
+            return inviteInfo.getSsrcInfo().getZlmStream();
+        }
+        if (inviteInfo.getStreamInfo() != null && inviteInfo.getStreamInfo().getStream() != null) {
+            return inviteInfo.getStreamInfo().getStream();
+        }
+        if ((inviteInfo.getSsrcInfo() == null || inviteInfo.getSsrcInfo().getZlmStream() == null)
+                && (inviteInfo.getStreamInfo() == null || inviteInfo.getStreamInfo().getStream() == null)) {
+            return inviteInfo.getStream();
+        }
+        return null;
+    }
+
+    private boolean isCompletedDownloadRetained(InviteInfo inviteInfo) {
+        return inviteInfo.getType() == InviteSessionType.DOWNLOAD
+                && inviteInfo.getStreamInfo() != null
+                && inviteInfo.getStreamInfo().getProgress() >= 1
+                && inviteInfo.getCleanupAt() != null
+                && System.currentTimeMillis() < inviteInfo.getCleanupAt();
     }
 
     @Override
@@ -1713,9 +1754,45 @@ public class PlayServiceImpl implements IPlayService {
         stopInviteResources(inviteInfo, device, channel, inviteInfo.getStream());
     }
 
+    @Override
+    public boolean stopIfOwner(InviteInfo expected) {
+        if (expected == null) {
+            return false;
+        }
+        try {
+            if (!inviteStreamService.removeInviteInfoIfSame(expected)) {
+                return false;
+            }
+        } catch (RuntimeException e) {
+            log.warn("[条件停止点播] 条件删除Invite失败，跳过资源清理: {}", e.getMessage());
+            return false;
+        }
+        DeviceChannel channel = null;
+        try {
+            channel = deviceChannelService.getOneForSourceById(expected.getChannelId());
+        } catch (RuntimeException e) {
+            log.warn("[条件停止点播] 查询通道失败，继续清理本地资源: {}", e.getMessage());
+        }
+        Device device = null;
+        if (channel != null) {
+            try {
+                device = deviceService.getDevice(channel.getDataDeviceId());
+            } catch (RuntimeException e) {
+                log.warn("[条件停止点播] 查询设备失败，继续清理本地资源: {}", e.getMessage());
+            }
+        }
+        stopInviteResourcesAfterRemoval(expected, device, channel, expected.getStream());
+        return true;
+    }
+
     private void stopInviteResources(InviteInfo inviteInfo, Device device, DeviceChannel channel,
                                      String fallbackStream) {
         safeRemoveInviteInfo(inviteInfo);
+        stopInviteResourcesAfterRemoval(inviteInfo, device, channel, fallbackStream);
+    }
+
+    private void stopInviteResourcesAfterRemoval(InviteInfo inviteInfo, Device device, DeviceChannel channel,
+                                                  String fallbackStream) {
         String stream = inviteInfo.getStream();
         if (stream == null && inviteInfo.getStreamInfo() != null) {
             stream = inviteInfo.getStreamInfo().getStream();

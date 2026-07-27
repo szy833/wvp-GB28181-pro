@@ -499,11 +499,17 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
 
     @Override
     public List<String> listRtpServer(MediaServer mediaServer) {
-        ZLMResult<List<RtpServerResult>> zlmResult = zlmresTfulUtils.listRtpServer(mediaServer);
-        List<String> result = new ArrayList<>();
-        if (zlmResult.getCode() != 0) {
-            return result;
+        ZLMResult<List<RtpServerResult>> zlmResult;
+        try {
+            zlmResult = zlmresTfulUtils.listRtpServer(mediaServer);
+        } catch (RuntimeException e) {
+            log.warn("[ZLM] 查询RTP监听失败", e);
+            return null;
         }
+        if (zlmResult == null || zlmResult.getCode() != 0) {
+            return null;
+        }
+        List<String> result = new ArrayList<>();
         List<RtpServerResult> data = zlmResult.getData();
         if (data == null || data.isEmpty()) {
             return result;
