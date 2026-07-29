@@ -3,6 +3,7 @@ package com.genersoft.iot.vmp.gb28181.bean;
 import com.genersoft.iot.vmp.common.InviteSessionType;
 import gov.nist.javax.sip.message.SIPResponse;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 @Data
 public class SsrcTransaction {
@@ -56,6 +57,13 @@ public class SsrcTransaction {
      * 类型
      */
     private InviteSessionType type;
+
+    /** Persistence timestamps used by the V2 session safety TTL. */
+    @EqualsAndHashCode.Exclude
+    private Long createdAt;
+
+    @EqualsAndHashCode.Exclude
+    private Long expireAt;
 
     public static SsrcTransaction buildForDevice(String deviceId, Integer channelId, String callId, String app, String stream,
                                                  String ssrc, String mediaServerId, SIPResponse response, InviteSessionType type) {

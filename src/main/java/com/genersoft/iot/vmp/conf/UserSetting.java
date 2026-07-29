@@ -143,6 +143,12 @@ public class UserSetting {
      */
     private String serverId = "000000";
 
+    /**
+     * SIP Invite session safety TTL.  Normal BYE/stop paths remove sessions earlier;
+     * this value only bounds records left behind by abnormal termination.
+     */
+    private long sipInviteSessionTtlSeconds = 7 * 24 * 60 * 60L;
+
 
     /**
      * 国标级联语音喊话发流模式 * UDP:udp传输 TCP-ACTIVE：tcp主动模式 TCP-PASSIVE：tcp被动模式

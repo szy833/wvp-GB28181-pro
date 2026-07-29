@@ -43,6 +43,12 @@ public class VideoManagerConstants {
 	public static final String SIP_INVITE_SESSION = "VMP_SIP_INVITE_SESSION_INFO:";
 	public static final String SIP_INVITE_SESSION_CALL_ID = SIP_INVITE_SESSION + "CALL_ID:";
 	public static final String SIP_INVITE_SESSION_STREAM = SIP_INVITE_SESSION + "STREAM:";
+	/** V2 session records.  DATA is the source of truth; the other keys are derived indexes. */
+	public static final String SIP_INVITE_SESSION_V2_DATA = "VMP_SIP_INVITE_SESSION_V2:DATA:";
+	public static final String SIP_INVITE_SESSION_V2_STREAM = "VMP_SIP_INVITE_SESSION_V2:STREAM:";
+	public static final String SIP_INVITE_SESSION_V2_DEVICE = "VMP_SIP_INVITE_SESSION_V2:DEVICE:";
+	public static final String SIP_INVITE_SESSION_V2_EXPIRE = "VMP_SIP_INVITE_SESSION_V2:EXPIRE:";
+	public static final String SIP_INVITE_SESSION_V2_META = "VMP_SIP_INVITE_SESSION_V2:META:";
 
 	public static final String MEDIA_STREAM_AUTHORITY = "VMP_MEDIA_STREAM_AUTHORITY";
 

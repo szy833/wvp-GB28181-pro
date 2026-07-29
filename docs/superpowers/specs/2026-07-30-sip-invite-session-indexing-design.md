@@ -37,12 +37,16 @@ VMP_SIP_INVITE_SESSION_V2:DEVICE:<serverId>:<deviceId>
 
 VMP_SIP_INVITE_SESSION_V2:EXPIRE:<serverId>
   ZSET   -> member=callId，score=expireAtMillis
+
+VMP_SIP_INVITE_SESSION_V2:META:<serverId>:<callId>
+  String -> device/app/stream 反向元数据，带一小时清理宽限期
 ```
 
 - DATA Key 是唯一会话内容来源，避免同一个 `SsrcTransaction` 在两个 Hash 中重复保存。
 - STREAM Key 只保存 Call-ID，按流查询为两次 O(1) 读取。
 - DEVICE Set 使设备查询复杂度变为 O(K)，K 为该设备的会话数。
 - EXPIRE ZSET 用于清理没有正常 BYE/停止回调的会话；DATA 和 STREAM 的 TTL 是 Redis 层的最后兜底。
+- META 用于 DATA 已因 TTL 消失时定位 STREAM 和 DEVICE 孤儿成员，不作为会话内容来源。
 - 默认安全 TTL 为 7 天，通过 `user-settings.sip-invite-session-ttl-seconds` 配置。该 TTL 是异常回收上限，不代表主动终止正常的长期会话；正常 BYE/停止仍立即删除。
 
 ## 写入与删除流程
@@ -88,7 +92,8 @@ VMP_SIP_INVITE_SESSION_V2:EXPIRE:<serverId>
 
 - 设备查询使用 `SMEMBERS` + 批量 DATA 读取，发现 DATA 不存在时惰性清理孤儿成员。
 - `/ssrc` 对应的 `getAll()` 使用 EXPIRE ZSET 的游标分批读取并批量加载 DATA，不再使用 Call-ID Hash 的 `HVALS`。
-- 迁移期 `getAll()` 额外使用旧 Call-ID Hash 的 `HSCAN` 发现尚未迁移的数据，迁移完成后不再访问旧 Hash。
+- 迁移期 `getAll()` 每次最多兼容扫描一个批次，剩余旧数据由后台迁移任务处理，避免请求退化为全量扫描。
+- 活跃会话接近安全 TTL 时按 owner 条件刷新 DATA/STREAM/META TTL 和 EXPIRE score，避免正常长期会话被安全 TTL 截断。
 
 ## 验收边界
 
@@ -100,6 +105,7 @@ VMP_SIP_INVITE_SESSION_V2:EXPIRE:<serverId>
 - 任意重复 `removeByStream()`、`removeByCallId()` 和过期清理均幂等。
 - 设备查询实现中不存在 `opsForHash().values()`。
 - 过期会话在正常清理周期内从所有 V2 索引移除。
+- DATA 过期时可通过 META 反向定位并删除 STREAM/DEVICE/EXPIRE 孤儿；活跃会话接近 TTL 时刷新安全窗口。
 - 旧 Hash 记录能够按需迁移和批量迁移，迁移成功后旧字段被删除。
 
 ### 不在本次范围
