@@ -12,10 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Reconciles active RTP-backed InviteInfo records with the media node's RTP listeners.
@@ -35,59 +32,52 @@ public class InviteInfoCleanupTask {
 
     @Scheduled(fixedRate = 30000)
     public void execute() {
-        List<InviteInfo> snapshot;
+        List<MediaServer> mediaServers;
         try {
-            snapshot = inviteStreamService.getAllInviteInfo();
+            mediaServers = mediaServerService.getAllOnlineList();
         } catch (RuntimeException e) {
-            log.warn("[Invite孤儿校验] 读取InviteInfo失败，跳过本轮", e);
+            log.warn("[Invite孤儿校验] 读取在线媒体节点失败，跳过本轮", e);
             return;
         }
-        if (snapshot == null || snapshot.isEmpty()) {
+        if (mediaServers == null || mediaServers.isEmpty()) {
             return;
         }
 
-        Map<String, List<InviteInfo>> byMediaServer = new HashMap<>();
-        for (InviteInfo inviteInfo : snapshot) {
-            if (inviteInfo == null || inviteInfo.getStatus() != InviteSessionStatus.ok
-                    || inviteInfo.getStreamInfo() == null || !isReconciliableType(inviteInfo)
-                    || !hasReliableOwner(inviteInfo)) {
+        for (MediaServer mediaServer : mediaServers) {
+            if (mediaServer == null || mediaServer.getId() == null || mediaServer.getId().isEmpty()) {
                 continue;
             }
-            String mediaServerId = resolveMediaServerId(inviteInfo);
-            if (mediaServerId == null) {
-                log.debug("[Invite孤儿校验] 缺少媒体节点，跳过：{}", inviteInfo);
-                continue;
-            }
-            byMediaServer.computeIfAbsent(mediaServerId, ignored -> new ArrayList<>()).add(inviteInfo);
-        }
-
-        for (Map.Entry<String, List<InviteInfo>> entry : byMediaServer.entrySet()) {
-            MediaServer mediaServer;
+            List<InviteInfo> activeInvites;
             try {
-                mediaServer = mediaServerService.getOne(entry.getKey());
+                activeInvites = inviteStreamService.getActiveInviteInfoByMediaServer(mediaServer.getId());
             } catch (RuntimeException e) {
-                log.warn("[Invite孤儿校验] 查询媒体节点失败，跳过：{}", entry.getKey(), e);
+                log.warn("[Invite孤儿校验] 读取媒体节点Invite失败，跳过：{}", mediaServer.getId(), e);
                 continue;
             }
-            if (mediaServer == null) {
-                log.debug("[Invite孤儿校验] 未找到媒体节点：{}", entry.getKey());
+            if (activeInvites == null || activeInvites.isEmpty()) {
                 continue;
             }
             if (!mediaServer.isRtpEnable()) {
-                log.debug("[Invite孤儿校验] 媒体节点为单端口模式，跳过RTP监听对账：{}", entry.getKey());
+                log.debug("[Invite孤儿校验] 媒体节点为单端口模式，跳过RTP监听对账：{}", mediaServer.getId());
                 continue;
             }
             List<String> rtpStreams;
             try {
                 rtpStreams = mediaServerService.listRtpServer(mediaServer);
             } catch (RuntimeException e) {
-                log.warn("[Invite孤儿校验] 查询RTP失败，跳过媒体节点：{}", entry.getKey(), e);
+                log.warn("[Invite孤儿校验] 查询RTP失败，跳过媒体节点：{}", mediaServer.getId(), e);
                 continue;
             }
             if (rtpStreams == null) {
                 continue;
             }
-            for (InviteInfo inviteInfo : entry.getValue()) {
+            for (InviteInfo inviteInfo : activeInvites) {
+                if (inviteInfo == null || inviteInfo.getStatus() != InviteSessionStatus.ok
+                        || inviteInfo.getStreamInfo() == null || !isReconciliableType(inviteInfo)
+                        || !hasReliableOwner(inviteInfo)
+                        || !mediaServer.getId().equals(resolveMediaServerId(inviteInfo))) {
+                    continue;
+                }
                 String actualStream = resolveActualRtpStream(inviteInfo);
                 if (actualStream == null) {
                     log.debug("[Invite孤儿校验] 缺少可靠ZLM流标识，跳过：{}", inviteInfo);
@@ -106,13 +96,12 @@ public class InviteInfoCleanupTask {
     }
 
     private String resolveMediaServerId(InviteInfo inviteInfo) {
-        if (inviteInfo.getMediaServerId() != null) {
-            return inviteInfo.getMediaServerId();
-        }
-        if (inviteInfo.getStreamInfo().getMediaServer() != null) {
+        if (inviteInfo.getStreamInfo().getMediaServer() != null
+                && inviteInfo.getStreamInfo().getMediaServer().getId() != null
+                && !inviteInfo.getStreamInfo().getMediaServer().getId().isEmpty()) {
             return inviteInfo.getStreamInfo().getMediaServer().getId();
         }
-        return null;
+        return inviteInfo.getMediaServerId();
     }
 
     private String resolveActualRtpStream(InviteInfo inviteInfo) {
@@ -138,6 +127,7 @@ public class InviteInfoCleanupTask {
 
     private boolean isCompletedDownloadRetained(InviteInfo inviteInfo) {
         return inviteInfo.getType() == InviteSessionType.DOWNLOAD
+                && inviteInfo.getStreamInfo() != null
                 && inviteInfo.getStreamInfo().getProgress() >= 1
                 && inviteInfo.getCleanupAt() != null
                 && System.currentTimeMillis() < inviteInfo.getCleanupAt();

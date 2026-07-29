@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -100,10 +101,67 @@ class PlayServiceImplStopTest {
                 rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
         ReflectionTestUtils.setField(service, "mediaServerService", mediaServers);
         InviteInfo invite = invite(device(), channel());
+        invite.setStreamInfo(new com.genersoft.iot.vmp.common.StreamInfo());
+        invite.getSsrcInfo().setZlmStream("stream-1");
         MediaServer mediaServer = new MediaServer();
         mediaServer.setId("media-1");
         mediaServer.setRtpEnable(true);
-        when(invites.getAllInviteInfo()).thenReturn(java.util.List.of(invite));
+        when(invites.getActiveInviteInfoByMediaServer("media-1")).thenReturn(java.util.List.of(invite));
+        when(mediaServers.listRtpServer(mediaServer)).thenReturn(java.util.List.of());
+        when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
+
+        service.zlmServerOnline(mediaServer);
+
+        verify(invites).removeInviteInfoIfSame(invite);
+        verify(invites, never()).getAllInviteInfo();
+        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+    }
+
+    @Test
+    void mediaServerOnlineUsesStreamInfoMediaServerWhenBothIdsArePresent() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        IMediaServerService mediaServers = mock(IMediaServerService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        ReflectionTestUtils.setField(service, "mediaServerService", mediaServers);
+        InviteInfo invite = invite(device(), channel());
+        com.genersoft.iot.vmp.common.StreamInfo streamInfo = new com.genersoft.iot.vmp.common.StreamInfo();
+        MediaServer streamMediaServer = new MediaServer();
+        streamMediaServer.setId("media-stream");
+        streamMediaServer.setRtpEnable(true);
+        streamInfo.setMediaServer(streamMediaServer);
+        invite.setStreamInfo(streamInfo);
+        invite.getSsrcInfo().setZlmStream("stream-1");
+        when(invites.getActiveInviteInfoByMediaServer("media-stream")).thenReturn(java.util.List.of(invite));
+        when(mediaServers.listRtpServer(streamMediaServer)).thenReturn(java.util.List.of());
+        when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
+
+        service.zlmServerOnline(streamMediaServer);
+
+        verify(invites).removeInviteInfoIfSame(invite);
+        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+    }
+
+    @Test
+    void mediaServerOnlineFallsBackWhenStreamInfoMediaServerIdIsEmpty() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        IReceiveRtpServerService rtp = mock(IReceiveRtpServerService.class);
+        IMediaServerService mediaServers = mock(IMediaServerService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        ReflectionTestUtils.setField(service, "mediaServerService", mediaServers);
+        InviteInfo invite = invite(device(), channel());
+        com.genersoft.iot.vmp.common.StreamInfo streamInfo = new com.genersoft.iot.vmp.common.StreamInfo();
+        MediaServer streamMediaServer = new MediaServer();
+        streamMediaServer.setId("");
+        streamInfo.setMediaServer(streamMediaServer);
+        invite.setStreamInfo(streamInfo);
+        invite.getSsrcInfo().setZlmStream("stream-1");
+        when(invites.getActiveInviteInfoByMediaServer("media-1")).thenReturn(java.util.List.of(invite));
+        MediaServer mediaServer = new MediaServer();
+        mediaServer.setId("media-1");
+        mediaServer.setRtpEnable(true);
         when(mediaServers.listRtpServer(mediaServer)).thenReturn(java.util.List.of());
         when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
 

@@ -9,6 +9,7 @@ import com.genersoft.iot.vmp.media.event.hook.Hook;
 import com.genersoft.iot.vmp.media.event.hook.HookSubscribe;
 import com.genersoft.iot.vmp.media.event.hook.HookSubscriptionHandle;
 import com.genersoft.iot.vmp.media.event.media.MediaDepartureEvent;
+import com.genersoft.iot.vmp.media.event.media.MediaArrivalEvent;
 import com.genersoft.iot.vmp.media.service.IMediaServerService;
 import com.genersoft.iot.vmp.media.zlm.dto.hook.OnStreamChangedHookParam;
 import com.genersoft.iot.vmp.service.bean.RTPServerParam;
@@ -245,5 +246,75 @@ class RtpServerServiceImplTest {
         assertEquals("business-stream", hookCaptor.getValue().getStream());
         verify(media).createRTPServer(eq(server), eq("rtp"), eq("0000007B"), anyLong(), any(),
                 anyBoolean(), anyBoolean(), anyBoolean(), any());
+    }
+
+    @Test
+    void mediaArrivalCompletesWaitingResourceOnlyOnce() {
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        AtomicInteger callbacks = new AtomicInteger();
+        RtpResourceContext context = new RtpResourceContext(
+                "resource-arrival", "business-stream", "0000007B",
+                (code, msg, data) -> callbacks.incrementAndGet(), () -> {});
+        assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        installOwner(service, "media-1:rtp:business-stream", context);
+
+        MediaServer server = new MediaServer();
+        server.setId("media-1");
+        MediaArrivalEvent event = new MediaArrivalEvent(this);
+        event.setMediaServer(server);
+        event.setApp("rtp");
+        event.setStream("business-stream");
+        event.setSchema("rtsp");
+
+        service.onApplicationEvent(event);
+        service.onApplicationEvent(event);
+
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS, context.getState());
+        assertEquals(1, callbacks.get());
+    }
+
+    @Test
+    void mediaArrivalMatchesZlmStreamId() {
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        AtomicInteger callbacks = new AtomicInteger();
+        RtpResourceContext context = new RtpResourceContext(
+                "resource-zlm-arrival", "business-stream", "0000007B",
+                (code, msg, data) -> callbacks.incrementAndGet(), () -> {});
+        assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        installOwner(service, "media-1:rtp:0000007B", context);
+
+        MediaServer server = new MediaServer();
+        server.setId("media-1");
+        MediaArrivalEvent event = new MediaArrivalEvent(this);
+        event.setMediaServer(server);
+        event.setApp("rtp");
+        event.setStream("0000007B");
+        event.setSchema("rtsp");
+
+        service.onApplicationEvent(event);
+
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS, context.getState());
+        assertEquals(1, callbacks.get());
+    }
+
+    @Test
+    void nonRtspMediaArrivalDoesNotCompleteResource() {
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        RtpResourceContext context = new RtpResourceContext(
+                "resource-non-rtsp", "business-stream", "0000007B", (code, msg, data) -> {}, () -> {});
+        assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        installOwner(service, "media-1:rtp:business-stream", context);
+
+        MediaServer server = new MediaServer();
+        server.setId("media-1");
+        MediaArrivalEvent event = new MediaArrivalEvent(this);
+        event.setMediaServer(server);
+        event.setApp("rtp");
+        event.setStream("business-stream");
+        event.setSchema("rtmp");
+
+        service.onApplicationEvent(event);
+
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA, context.getState());
     }
 }

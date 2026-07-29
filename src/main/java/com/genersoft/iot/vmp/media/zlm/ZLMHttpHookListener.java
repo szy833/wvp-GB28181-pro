@@ -134,20 +134,33 @@ public class ZLMHttpHookListener {
     @ResponseBody
     @PostMapping(value = "/on_stream_changed", produces = "application/json;charset=UTF-8")
     public HookResult onStreamChanged(@RequestBody OnStreamChangedHookParam param) {
+        if (param == null) {
+            log.warn("[ZLM HOOK] 流生命周期事件为空");
+            return HookResult.SUCCESS();
+        }
+        log.info("[ZLM HOOK] 流生命周期 action={}, mediaServer={}, schema={}, app={}, stream={}, "
+                        + "callId={}, originType={}, originTypeStr={}, originUrl={}, readers={}, originSock={}",
+                param.isRegist() ? "register" : "unregister", param.getMediaServerId(), param.getSchema(),
+                param.getApp(), param.getStream(), param.getCallId(), param.getOriginType(),
+                param.getOriginTypeStr(), param.getOriginUrl(), param.getTotalReaderCount(), param.getOriginSock());
         MediaServer mediaServer = mediaServerService.getOne(param.getMediaServerId());
         if (mediaServer == null) {
+            log.warn("[ZLM HOOK] 流生命周期忽略：找不到媒体节点，mediaServer={}, schema={}, app={}, stream={}",
+                    param.getMediaServerId(), param.getSchema(), param.getApp(), param.getStream());
             return HookResult.SUCCESS();
         }
         if (!ObjectUtils.isEmpty(mediaServer.getTranscodeSuffix())
                 && !"null".equalsIgnoreCase(mediaServer.getTranscodeSuffix())
+                && param.getStream() != null
                 && param.getStream().endsWith(mediaServer.getTranscodeSuffix())  ) {
+            log.debug("[ZLM HOOK] 流生命周期忽略转码流：mediaServer={}, schema={}, app={}, stream={}",
+                    param.getMediaServerId(), param.getSchema(), param.getApp(), param.getStream());
             return HookResult.SUCCESS();
         }
-        if (param.getSchema().equalsIgnoreCase("rtsp")) {
+        if ("rtsp".equalsIgnoreCase(param.getSchema())) {
             if (param.isRegist()) {
-                log.info("[ZLM HOOK] 流注册, {}->{}->{}/{}", param.getMediaServerId(), param.getSchema(), param.getApp(), param.getStream());
                 String queryParams = param.getParams();
-                if (queryParams == null) {
+                if (queryParams == null && param.getOriginUrl() != null && param.getOriginUrl().length() > 4) {
                     try {
                         URL url = new URL("http" + param.getOriginUrl().substring(4));
                         queryParams = url.getQuery();
@@ -158,13 +171,19 @@ public class ZLMHttpHookListener {
                 }else {
                     param.setParamMap(new HashMap<>());
                 }
+                log.info("[ZLM HOOK] 流注册已发布媒体到达事件：mediaServer={}, app={}, stream={}, params={}",
+                        param.getMediaServerId(), param.getApp(), param.getStream(), param.getParamMap());
                 MediaArrivalEvent mediaArrivalEvent = MediaArrivalEvent.getInstance(this, param, mediaServer, userSetting.getServerId());
                 applicationEventPublisher.publishEvent(mediaArrivalEvent);
             } else {
-                log.info("[ZLM HOOK] 流注销, {}->{}->{}/{}", param.getMediaServerId(), param.getSchema(), param.getApp(), param.getStream());
+                log.info("[ZLM HOOK] 流注销已发布媒体离开事件：mediaServer={}, app={}, stream={}, originUrl={}",
+                        param.getMediaServerId(), param.getApp(), param.getStream(), param.getOriginUrl());
                 MediaDepartureEvent mediaDepartureEvent = MediaDepartureEvent.getInstance(this, param, mediaServer);
                 applicationEventPublisher.publishEvent(mediaDepartureEvent);
             }
+        } else {
+            log.debug("[ZLM HOOK] 非RTSP流生命周期不参与GB28181 RTP关联：mediaServer={}, schema={}, app={}, stream={}",
+                    param.getMediaServerId(), param.getSchema(), param.getApp(), param.getStream());
         }
 
         return HookResult.SUCCESS();

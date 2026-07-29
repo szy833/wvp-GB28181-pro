@@ -90,7 +90,23 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
     @Async
     @org.springframework.context.event.EventListener
     public void onApplicationEvent(MediaArrivalEvent event) {
-
+        if (event == null || event.getMediaServer() == null || event.getApp() == null || event.getStream() == null) {
+            return;
+        }
+        if (event.getSchema() != null && !"rtsp".equalsIgnoreCase(event.getSchema())) {
+            return;
+        }
+        String ownerKey = resourceOwnerKey(event.getMediaServer().getId(), event.getApp(), event.getStream());
+        RtpResourceContext context = resourceOwners.get(ownerKey);
+        if (context == null) {
+            log.debug("[RTP媒体到达] 未匹配资源：mediaServer={}, app={}, stream={}, schema={}",
+                    event.getMediaServer().getId(), event.getApp(), event.getStream(), event.getSchema());
+            return;
+        }
+        log.info("[RTP媒体到达] 已匹配资源：resourceId={}, state={}, mediaServer={}, app={}, stream={}, schema={}",
+                context.getResourceId(), context.getState(), event.getMediaServer().getId(), event.getApp(),
+                event.getStream(), event.getSchema());
+        context.onMediaArrival(HookData.getInstance(event));
     }
 
     /**
@@ -103,14 +119,21 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             return;
         }
         RtpResourceContext context = findDepartureOwner(event);
-        if (context != null) {
-            com.genersoft.iot.vmp.service.bean.RtpResourceState state = context.getState();
-            if (state == com.genersoft.iot.vmp.service.bean.RtpResourceState.REGISTERING
-                    || state == com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA) {
-                context.completeDeparture(InviteErrorCode.FAIL.getCode(), "媒体流已离开", null);
-            } else if (state == com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS) {
-                context.close("media departure");
-            }
+        if (context == null) {
+            log.debug("[RTP媒体离开] 未匹配资源：mediaServer={}, app={}, stream={}, schema={}, originUrl={}",
+                    event.getMediaServer().getId(), event.getApp(), event.getStream(), event.getSchema(),
+                    event.getOriginUrl());
+            return;
+        }
+        com.genersoft.iot.vmp.service.bean.RtpResourceState state = context.getState();
+        log.info("[RTP媒体离开] 已匹配资源：resourceId={}, state={}, mediaServer={}, app={}, stream={}, schema={}, originUrl={}",
+                context.getResourceId(), state, event.getMediaServer().getId(), event.getApp(), event.getStream(),
+                event.getSchema(), event.getOriginUrl());
+        if (state == com.genersoft.iot.vmp.service.bean.RtpResourceState.REGISTERING
+                || state == com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA) {
+            context.completeDeparture(InviteErrorCode.FAIL.getCode(), "媒体流已离开", null);
+        } else if (state == com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS) {
+            context.close("media departure");
         }
     }
 
@@ -542,7 +565,15 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                 return new RtpServerOpenResult(-1, resourceId, businessStreamId, zlmStreamId, context);
             }
             HookSubscriptionHandle hookHandle = subscribe.addSubscribeWithHandle(hook, contextData -> {
+                log.info("[RTP媒体到达] 收到Hook回调：resourceId={}, stateBefore={}, mediaServer={}, app={}, stream={}, schema={}",
+                        context.getResourceId(), context.getState(),
+                        contextData == null || contextData.getMediaServer() == null ? null : contextData.getMediaServer().getId(),
+                        contextData == null ? null : contextData.getApp(),
+                        contextData == null ? null : contextData.getStream(),
+                        contextData == null ? null : contextData.getSchema());
                 context.onMediaArrival(contextData);
+                log.info("[RTP媒体到达] Hook回调处理完成：resourceId={}, stateAfter={}",
+                        context.getResourceId(), context.getState());
             });
             if (!context.registerHook(hookHandle, subscribe)) {
                 creationFinished.set(true);

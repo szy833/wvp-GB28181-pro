@@ -52,6 +52,25 @@ public interface IInviteStreamService {
     List<InviteInfo> getAllInviteInfo();
 
     /**
+     * Returns active InviteInfo records whose current primary record belongs to the specified media node.
+     */
+    List<InviteInfo> getActiveInviteInfoByMediaServer(String mediaServerId);
+
+    boolean inviteIndexesReady();
+
+    boolean inviteIndexesBackfilled();
+
+    /**
+     * Builds derived indexes without enabling index-only reads.
+     */
+    boolean rebuildInviteIndexes();
+
+    /**
+     * Enables index-only reads after all legacy writers have been removed from service.
+     */
+    boolean activateInviteIndexes();
+
+    /**
      * 获取点播的状态信息
      */
     InviteInfo getInviteInfoByDeviceAndChannel(InviteSessionType type, Integer channelId);

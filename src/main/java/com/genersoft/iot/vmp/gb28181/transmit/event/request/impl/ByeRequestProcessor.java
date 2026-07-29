@@ -17,6 +17,8 @@ import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.service.IMediaServerService;
 import com.genersoft.iot.vmp.service.IReceiveRtpServerService;
 import com.genersoft.iot.vmp.service.ISendRtpServerService;
+import com.genersoft.iot.vmp.service.bean.InviteErrorCode;
+import com.genersoft.iot.vmp.service.bean.SSRCInfo;
 import com.genersoft.iot.vmp.service.redisMsg.IRedisRpcService;
 import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
 import gov.nist.javax.sip.message.SIPRequest;
@@ -29,6 +31,7 @@ import javax.sip.InvalidArgumentException;
 import javax.sip.RequestEvent;
 import javax.sip.SipException;
 import javax.sip.header.CallIdHeader;
+import javax.sip.header.CSeqHeader;
 import javax.sip.message.Response;
 import java.text.ParseException;
 
@@ -108,12 +111,20 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 			log.error("[回复BYE信息失败]，{}", e.getMessage());
 		}
 		CallIdHeader callIdHeader = (CallIdHeader)evt.getRequest().getHeader(CallIdHeader.NAME);
-		SendRtpInfo sendRtpItem =  sendRtpServerService.queryByCallId(callIdHeader.getCallId());
+		String callId = callIdHeader == null ? null : callIdHeader.getCallId();
+		CSeqHeader cSeqHeader = (CSeqHeader) request.getHeader(CSeqHeader.NAME);
+		String remoteAddress = request.getRemoteAddress() == null ? null : request.getRemoteAddress().getHostAddress();
+		int remotePort = request.getRemotePort();
+		log.info("[收到BYE] 入站信令 remote={}:{}, callId={}, cseq={}, from={}, to={}",
+				remoteAddress, remotePort, callId,
+				cSeqHeader == null ? null : cSeqHeader.getSeqNumber(),
+				request.getFromHeader(), request.getToHeader());
+		SendRtpInfo sendRtpItem =  sendRtpServerService.queryByCallId(callId);
 
 		// 收流端发送的停止
 		if (sendRtpItem != null){
 			CommonGBChannel channel = channelService.getOne(sendRtpItem.getChannelId());
-			log.info("[收到bye] 来自{}，停止通道：{}, 类型： {}, callId: {}", sendRtpItem.getTargetId(), channel.getGbDeviceId(), sendRtpItem.getPlayType(), callIdHeader.getCallId());
+			log.info("[收到bye] 来自{}，停止通道：{}, 类型： {}, callId: {}", sendRtpItem.getTargetId(), channel.getGbDeviceId(), sendRtpItem.getPlayType(), callId);
 
 			String streamId = sendRtpItem.getStream();
 			log.info("[收到bye] 停止推流：{}, 媒体节点： {}", streamId, sendRtpItem.getMediaServerId());
@@ -128,7 +139,7 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 						sendRtpServerService.deleteByCallId(sendRtpItem.getCallId());
 					}else {
 						MediaServer mediaServer = mediaServerService.getOne(sendRtpItem.getMediaServerId());
-						sendRtpServerService.deleteByCallId(callIdHeader.getCallId());
+						sendRtpServerService.deleteByCallId(callId);
 						if (mediaServer != null) {
 							mediaServerService.stopSendRtp(mediaServer, sendRtpItem.getApp(), sendRtpItem.getStream(), sendRtpItem.getSsrc());
 						}
@@ -145,7 +156,7 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 				MediaServer mediaServer = mediaServerService.getOne(sendRtpItem.getMediaServerId());
 				if (mediaServer != null) {
 					AudioBroadcastCatch audioBroadcastCatch = audioBroadcastManager.get(sendRtpItem.getChannelId());
-					if (audioBroadcastCatch != null && audioBroadcastCatch.getSipTransactionInfo().getCallId().equals(callIdHeader.getCallId())) {
+					if (audioBroadcastCatch != null && audioBroadcastCatch.getSipTransactionInfo().getCallId().equals(callId)) {
 						// 来自上级平台的停止对讲
 						log.info("[停止对讲] 来自上级，平台：{}, 通道：{}", sendRtpItem.getTargetId(), sendRtpItem.getChannelId());
 						audioBroadcastManager.del(sendRtpItem.getChannelId());
@@ -182,11 +193,14 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 			}
 		}
 		// 可能是设备发送的停止
-		SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByCallId(callIdHeader.getCallId());
+		SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByCallId(callId);
 		if (ssrcTransaction == null) {
+			log.warn("[收到BYE] 未找到SIP会话关联：callId={}", callId);
 			return;
 		}
-		log.info("[收到bye] 来自：{}, 通道: {}, 类型： {}", ssrcTransaction.getDeviceId(), ssrcTransaction.getChannelId(), ssrcTransaction.getType());
+		log.info("[收到BYE] 会话关联 deviceId={}, channelId={}, type={}, stream={}, mediaServerId={}, callId={}",
+				ssrcTransaction.getDeviceId(), ssrcTransaction.getChannelId(), ssrcTransaction.getType(),
+				ssrcTransaction.getStream(), ssrcTransaction.getMediaServerId(), callId);
 		// TODO 结束点播 避免等待
 
 		boolean rtpClosed = false;
@@ -226,6 +240,16 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 						try {
 							InviteInfo inviteInfo = inviteStreamService.getInviteInfoByDeviceAndChannel(ssrcTransaction.getType(), channel.getId());
 							if (inviteInfo != null) {
+								SSRCInfo inviteSsrc = inviteInfo.getSsrcInfo();
+								log.info("[收到BYE] 命中InviteInfo：type={}, status={}, stream={}, mediaServerId={}, "
+										+ "ssrc={}, resourceId={}, zlmStream={}, streamInfo={}",
+										ssrcTransaction.getType(), inviteInfo.getStatus(), inviteInfo.getStream(), inviteInfo.getMediaServerId(),
+										inviteSsrc == null ? null : inviteSsrc.getSsrc(),
+										inviteSsrc == null ? null : inviteSsrc.getResourceId(),
+										inviteSsrc == null ? null : inviteSsrc.getZlmStream(), inviteInfo.getStreamInfo());
+								inviteStreamService.call(ssrcTransaction.getType(), channel.getId(), null,
+													InviteErrorCode.ERROR_FOR_FINISH.getCode(),
+													InviteErrorCode.ERROR_FOR_FINISH.getMsg(), null);
 								deviceChannelService.stopPlay(channel.getId());
 								inviteStreamService.removeInviteInfo(inviteInfo);
 								if (inviteInfo.getSsrcInfo() != null) {
@@ -235,7 +259,11 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 									receiveRtpServerService.closeRTPServer(inviteInfo.getStreamInfo().getMediaServer(), inviteInfo.getStreamInfo().getApp(), inviteInfo.getStreamInfo().getStream());
 									rtpClosed = true;
 								}
-							}
+							} else {
+								log.warn("[收到BYE] 未找到InviteInfo：type={}, deviceId={}, channelId={}, stream={}, callId={}",
+										ssrcTransaction.getType(), ssrcTransaction.getDeviceId(), channel.getId(),
+										ssrcTransaction.getStream(), callId);
+								}
 						} catch (Exception e) {
 							log.error("[BYE处理] 清理Invite异常: type={}, channelId={}", ssrcTransaction.getType(), channel.getId(), e);
 						}

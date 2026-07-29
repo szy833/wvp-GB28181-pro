@@ -8,10 +8,12 @@ import com.genersoft.iot.vmp.conf.DynamicTask;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ScheduledFuture;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Owns the terminal state and cleanup callback for one RTP open attempt.
  */
+@Slf4j
 public class RtpResourceContext {
 
     private final String resourceId;
@@ -182,6 +184,7 @@ public class RtpResourceContext {
                 return false;
             }
             if (state.compareAndSet(current, target)) {
+                logStateTransition(current, target, "explicit transition");
                 return true;
             }
         }
@@ -194,12 +197,18 @@ public class RtpResourceContext {
             if (!state.compareAndSet(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA)) {
                 return false;
             }
+            logStateTransition(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA,
+                    "RTP listener created on port " + port);
             pending = earlyArrival.getAndSet(null);
             if (pending != null) {
                 // Claim SUCCESS while holding the same lifecycle lock as timeout
                 // and failure transitions; the cached arrival cannot be lost.
                 successClaimed = state.compareAndSet(RtpResourceState.WAITING_MEDIA,
                         RtpResourceState.SUCCESS);
+                if (successClaimed) {
+                    logStateTransition(RtpResourceState.WAITING_MEDIA, RtpResourceState.SUCCESS,
+                            "media arrival received before listener completion");
+                }
             }
         }
         if (successClaimed) {
@@ -230,6 +239,7 @@ public class RtpResourceContext {
                 return false;
             }
         }
+        logStateTransition(RtpResourceState.WAITING_MEDIA, RtpResourceState.SUCCESS, "media arrival");
         runCleanup(successCleanup);
         runCallback(0, "success", data);
         return true;
@@ -248,6 +258,7 @@ public class RtpResourceContext {
     }
 
     private boolean completeFailureState(RtpResourceState terminalState, int code, String msg, HookData data) {
+        RtpResourceState previous;
         synchronized (this) {
             RtpResourceState current;
             do {
@@ -256,7 +267,9 @@ public class RtpResourceContext {
                     return false;
                 }
             } while (!state.compareAndSet(current, terminalState));
+            previous = current;
         }
+        logStateTransition(previous, terminalState, msg);
         runCleanup(terminalCleanup);
         runCallback(code, msg, data);
         return true;
@@ -270,6 +283,7 @@ public class RtpResourceContext {
                 return false;
             }
             if (state.compareAndSet(current, RtpResourceState.CLOSED)) {
+                logStateTransition(current, RtpResourceState.CLOSED, reason);
                 runCleanup(terminalCleanup);
                 return true;
             }
@@ -292,6 +306,11 @@ public class RtpResourceContext {
                 // A caller callback must not break lifecycle cleanup.
             }
         }
+    }
+
+    private void logStateTransition(RtpResourceState from, RtpResourceState to, String reason) {
+        log.info("[RTP资源状态] resourceId={}, businessStream={}, zlmStream={}, {} -> {}, reason={}",
+                resourceId, businessStreamId, zlmStreamId, from, to, reason);
     }
 
     private boolean isAllowed(RtpResourceState current, RtpResourceState target) {

@@ -58,7 +58,7 @@ class PlayServiceImplDownloadCleanupTest {
     }
 
     @Test
-    void progressPollThatReachesCompletionSetsRetentionDeadline() {
+    void progressPollThatReachesCompletionSetsRetentionDeadline() throws Exception {
         Fixture fixture = fixture(0.5);
         fixture.invite.getStreamInfo().setStartTime("2026-07-27 00:00:00");
         fixture.invite.getStreamInfo().setEndTime("2026-07-27 00:01:00");
