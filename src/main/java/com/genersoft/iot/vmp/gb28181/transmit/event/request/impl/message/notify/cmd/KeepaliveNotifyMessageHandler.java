@@ -25,8 +25,9 @@ import javax.sip.RequestEvent;
 import javax.sip.SipException;
 import javax.sip.message.Response;
 import java.text.ParseException;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -39,7 +40,7 @@ public class KeepaliveNotifyMessageHandler extends SIPRequestProcessorParent imp
 
     private final static String cmdType = "Keepalive";
 
-    private final BlockingQueue<Device> taskQueue = new LinkedBlockingQueue<>();
+    private KeepaliveTaskBuffer pendingKeepalives = new KeepaliveTaskBuffer(100_000);
 
     @Autowired
     private NotifyMessageHandler notifyMessageHandler;
@@ -58,6 +59,7 @@ public class KeepaliveNotifyMessageHandler extends SIPRequestProcessorParent imp
 
     @Override
     public void afterPropertiesSet() throws Exception {
+        pendingKeepalives = new KeepaliveTaskBuffer(userSetting.getMaxNotifyCountQueue());
         notifyMessageHandler.addHandler(cmdType, this);
     }
 
@@ -69,7 +71,6 @@ public class KeepaliveNotifyMessageHandler extends SIPRequestProcessorParent imp
         } catch (SipException | InvalidArgumentException | ParseException e) {
             log.error("[命令发送失败] 心跳回复: {}", e.getMessage());
         }
-        taskQueue.add(device);
         SIPRequest request = (SIPRequest) evt.getRequest();
 
         RemoteAddressInfo remoteAddressInfo = SipUtils.getRemoteAddressFromRequest(request, userSetting.getSipUseSourceIpAsRemoteAddress());
@@ -80,7 +81,11 @@ public class KeepaliveNotifyMessageHandler extends SIPRequestProcessorParent imp
             device.setIp(remoteAddressInfo.getIp());
             device.setLocalIp(request.getLocalAddress().getHostAddress());
         }
-        device.setKeepaliveTimeStamp(System.currentTimeMillis());
+        long keepaliveTimeStamp = System.currentTimeMillis();
+        device.setKeepaliveTimeStamp(keepaliveTimeStamp);
+        if (!pendingKeepalives.offer(device.getDeviceId(), keepaliveTimeStamp)) {
+            log.warn("[心跳记录] 待处理设备数量已达到上限，丢弃设备 {} 的历史记录", device.getDeviceId());
+        }
 
         if (device.isOnLine()) {
             long expiresTime = Math.min(device.getExpires(), device.getHeartBeatInterval() * device.getHeartBeatCount()) * 1000L;
@@ -94,12 +99,21 @@ public class KeepaliveNotifyMessageHandler extends SIPRequestProcessorParent imp
     }
     @Scheduled(fixedDelay = 10, timeUnit = TimeUnit.SECONDS)
     public void executeUpdateDeviceList() {
-        log.debug("[定时任务] 更新心跳记录，待处理设备数量: {}", taskQueue.size());
+        Map<String, KeepaliveTaskBuffer.PendingKeepalive> snapshot = pendingKeepalives.snapshot();
+        log.debug("[定时任务] 更新心跳记录，待处理设备数量: {}", snapshot.size());
+        if (snapshot.isEmpty()) {
+            return;
+        }
         try {
-            if (!taskQueue.isEmpty()) {
-                redisCatchStorage.updateDeviceKeepaliveTimeStamp(taskQueue.stream().toList());
-                taskQueue.clear();
+            List<Device> devices = new ArrayList<>(snapshot.size());
+            for (KeepaliveTaskBuffer.PendingKeepalive pending : snapshot.values()) {
+                Device device = new Device();
+                device.setDeviceId(pending.deviceId());
+                device.setKeepaliveTimeStamp(pending.timestamp());
+                devices.add(device);
             }
+            redisCatchStorage.updateDeviceKeepaliveTimeStamp(devices);
+            pendingKeepalives.removeSnapshot(snapshot);
         } catch (Exception e) {
             log.error("[定时任务] 更新心跳记录 执行异常", e);
         }
