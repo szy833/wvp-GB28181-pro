@@ -23,6 +23,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
+import java.lang.reflect.Method;
 import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -44,6 +45,22 @@ class RtpServerServiceImplTest {
         MediaDepartureEvent event = MediaDepartureEvent.getInstance(this, param, server);
 
         assertEquals("rtp://127.0.0.1/rtp/0000007B", event.getOriginUrl());
+    }
+
+    @Test
+    void invalidPlayArgumentsDoNotAllocateSsrcLease() {
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        SSRCFactory ssrcFactory = mock(SSRCFactory.class);
+        MediaServer server = new MediaServer();
+        server.setId("media-1");
+        AtomicInteger callbacks = new AtomicInteger();
+        ReflectionTestUtils.setField(service, "ssrcFactory", ssrcFactory);
+
+        service.openGbRTPServerForPlay(server, null, null, null, false,
+                (code, msg, data) -> callbacks.incrementAndGet());
+
+        assertEquals(1, callbacks.get());
+        verifyNoInteractions(ssrcFactory);
     }
 
     @Test
@@ -74,6 +91,23 @@ class RtpServerServiceImplTest {
         assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
         assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS));
         installOwner(service, "media-1:rtp:business", context);
+
+        service.onApplicationEvent(departure("media-1", "rtp", "business", null));
+
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.CLOSED, context.getState());
+        assertEquals(1, cleanup.get());
+    }
+
+    @Test
+    void departureWithoutOriginUrlMatchesBusinessStreamOwner() {
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        AtomicInteger cleanup = new AtomicInteger();
+        RtpResourceContext context = new RtpResourceContext(
+                "resource-business-owner", "business", "0000007B", (code, msg, data) -> {}, cleanup::incrementAndGet);
+        assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS));
+        installOwner(service, "media-1:rtp:business", context);
+        installOwner(service, "media-1:rtp:0000007B", context);
 
         service.onApplicationEvent(departure("media-1", "rtp", "business", null));
 
@@ -197,6 +231,8 @@ class RtpServerServiceImplTest {
     @Test
     void staleResourceIdMustNotFallBackToUnownedRtpClose() {
         IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
         RtpServerServiceImpl service = new RtpServerServiceImpl();
         ReflectionTestUtils.setField(service, "mediaServerService", media);
 
@@ -204,10 +240,49 @@ class RtpServerServiceImplTest {
         stale.setResourceId("resource-already-closed");
         stale.setMediaServerId("media-1");
         stale.setZlmStream("0001");
+        when(media.getOne("media-1")).thenReturn(server);
 
         service.closeRTPServer(stale);
 
-        verifyNoInteractions(media);
+        verify(media, never()).closeRTPServer(any(), anyString(), anyString());
+        verify(media).closeStreams(server, "rtp", "business");
+    }
+
+    @Test
+    void legacySsrcOnlyCloseUsesValidatedListener() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+        when(media.getOne("media-1")).thenReturn(server);
+        when(media.listRtpServer(server)).thenReturn(java.util.List.of("0000007B"));
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+
+        SSRCInfo legacy = new SSRCInfo(1234, "123", "rtp", "business");
+        legacy.setMediaServerId("media-1");
+
+        assertTrue(service.closeRtpResource(legacy));
+        verify(media).listRtpServer(server);
+        verify(media).closeRTPServer(server, "rtp", "0000007B");
+        verify(media).closeStreams(server, "rtp", "business");
+    }
+
+    @Test
+    void legacyBusinessCloseDoesNotCloseListener() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+
+        service.closeRTPServer(server, "rtp", "business");
+
+        verify(media).closeStreams(server, "rtp", "business");
+        verify(media, never()).closeRTPServer(any(), anyString(), anyString());
     }
 
     @Test
@@ -271,6 +346,154 @@ class RtpServerServiceImplTest {
 
         assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS, context.getState());
         assertEquals(1, callbacks.get());
+    }
+
+    @Test
+    void terminalCleanupUsesZlmListenerAndBusinessPublishedStream() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        DynamicTask tasks = mock(DynamicTask.class);
+        SSRCFactory ssrc = mock(SSRCFactory.class);
+        UserSetting settings = mock(UserSetting.class);
+        HookSubscribe hooks = mock(HookSubscribe.class);
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+        when(settings.getPlayTimeout()).thenReturn(1000);
+        when(tasks.startDelayWithHandle(anyString(), any(Runnable.class), anyInt()))
+                .thenReturn(mock(ScheduledFuture.class));
+        when(hooks.addSubscribeWithHandle(any(), any())).thenReturn(
+                new HookSubscriptionHandle("key", data -> {}));
+        when(media.createRTPServer(any(), anyString(), anyString(), anyLong(), any(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
+                .thenReturn(1234);
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+        ReflectionTestUtils.setField(service, "dynamicTask", tasks);
+        ReflectionTestUtils.setField(service, "ssrcFactory", ssrc);
+        ReflectionTestUtils.setField(service, "userSetting", settings);
+        ReflectionTestUtils.setField(service, "subscribe", hooks);
+        ReflectionTestUtils.setField(service, "redisTemplate", redis);
+
+        RTPServerParam param = new RTPServerParam(server, "rtp", "business-stream", 123L, null,
+                false, false, false, 0);
+        RtpServerOpenResult result = service.openCommonRTPServerWithHandle(param,
+                (code, msg, data) -> {});
+
+        assertTrue(result.isSuccess());
+        service.closeRTPServer(result);
+
+        verify(media).closeRTPServer(server, "rtp", "0000007B");
+        verify(media).closeStreams(server, "rtp", "business-stream");
+        verify(media, never()).closeStreams(server, "rtp", "0000007B");
+    }
+
+    @Test
+    void businessStreamFallbackDoesNotIssueAmbiguousZlmClose() throws Exception {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+
+        Method closeByBusiness = RtpServerServiceImpl.class.getMethod(
+                "closeRTPServerByBusinessStream", MediaServer.class, String.class, String.class);
+        Object closed = closeByBusiness.invoke(service, server, "rtp", "business-stream");
+
+        assertEquals(Boolean.FALSE, closed);
+        verify(media, never()).closeRTPServer(any(), anyString(), anyString());
+        verify(media).closeStreams(server, "rtp", "business-stream");
+    }
+
+    @Test
+    void staleBusinessFallbackCannotCloseCurrentOwner() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+        RtpResourceContext current = new RtpResourceContext(
+                "resource-current", "business-stream", "000000C8", (code, msg, data) -> {}, () -> {});
+        assertTrue(current.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        installOwner(service, "media-1:rtp:business-stream", current);
+
+        assertFalse(service.closeRTPServerByBusinessStreamIfUnowned(server, "rtp", "business-stream"));
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA, current.getState());
+        verify(media, never()).closeStreams(any(), anyString(), anyString());
+    }
+
+    @Test
+    void legacySsrcWithoutListenerCannotCloseCurrentOwner() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+        when(media.getOne("media-1")).thenReturn(server);
+        when(media.listRtpServer(server)).thenReturn(java.util.List.of());
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+        RtpResourceContext current = new RtpResourceContext(
+                "resource-current", "business-stream", "000000C8", (code, msg, data) -> {}, () -> {});
+        assertTrue(current.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        installOwner(service, "media-1:rtp:business-stream", current);
+
+        SSRCInfo legacy = new SSRCInfo(1234, "123", "rtp", "business-stream");
+        legacy.setMediaServerId("media-1");
+        assertFalse(service.closeRtpResource(legacy));
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA, current.getState());
+        verify(media, never()).closeStreams(any(), anyString(), anyString());
+    }
+
+    @Test
+    void handlelessZlmRecordCannotCloseCurrentListenerOwner() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+        when(media.getOne("media-1")).thenReturn(server);
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+        RtpResourceContext current = new RtpResourceContext(
+                "resource-current", "new-business", "0000007B", (code, msg, data) -> {}, () -> {});
+        assertTrue(current.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+        installOwner(service, "media-1:rtp:0000007B", current);
+
+        SSRCInfo stale = new SSRCInfo(1234, "123", "rtp", "old-business");
+        stale.setMediaServerId("media-1");
+        stale.setZlmStream("0000007B");
+
+        assertFalse(service.closeRtpResource(stale));
+        assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA, current.getState());
+        verify(media, never()).closeRTPServer(any(), anyString(), anyString());
+    }
+
+    @Test
+    void legacySsrcCloseRequiresAValidatedZlmListener() {
+        IMediaServerService media = mock(IMediaServerService.class);
+        MediaServer server = mock(MediaServer.class);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+        when(media.getOne("media-1")).thenReturn(server);
+
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
+
+        when(media.listRtpServer(server)).thenReturn(java.util.List.of("0000007B"));
+        assertTrue(service.closeRTPServerBySsrcId("media-1", "rtp", "123"));
+        verify(media).closeRTPServer(server, "rtp", "0000007B");
+
+        reset(media);
+        when(server.getId()).thenReturn("media-1");
+        when(server.isRtpEnable()).thenReturn(true);
+        when(media.getOne("media-1")).thenReturn(server);
+        when(media.listRtpServer(server)).thenReturn(java.util.List.of("000000C8"));
+        assertFalse(service.closeRTPServerBySsrcId("media-1", "rtp", "123"));
+        verify(media, never()).closeRTPServer(any(), anyString(), anyString());
     }
 
     @Test

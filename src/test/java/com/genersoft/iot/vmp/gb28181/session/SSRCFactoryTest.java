@@ -1,15 +1,29 @@
 package com.genersoft.iot.vmp.gb28181.session;
 
+import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSONObject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.media.bean.MediaServer;
+import com.genersoft.iot.vmp.media.service.IMediaServerService;
+import com.genersoft.iot.vmp.media.zlm.ZLMRESTfulUtils;
+import com.genersoft.iot.vmp.media.event.mediaServer.MediaServerOnlineEvent;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import com.genersoft.iot.vmp.media.zlm.dto.ZLMResult;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 class SSRCFactoryTest {
 
@@ -28,6 +42,7 @@ class SSRCFactoryTest {
         java.util.concurrent.ScheduledExecutorService scheduler =
                 (java.util.concurrent.ScheduledExecutorService) schedulerField.get(ssrcFactory);
         scheduler.shutdownNow();
+        ssrcFactory.markReconciliationReady(rtpServer(SERVER_ID), new ArrayList<>());
     }
 
     @Test
@@ -65,6 +80,8 @@ class SSRCFactoryTest {
     void allocations_forDifferentServers_shouldBeIndependent() {
         String serverA = "server-a";
         String serverB = "server-b";
+        ssrcFactory.markReconciliationReady(rtpServer(serverA), new ArrayList<>());
+        ssrcFactory.markReconciliationReady(rtpServer(serverB), new ArrayList<>());
 
         for (int i = 0; i < 10000; i++) {
             assertNotNull(ssrcFactory.getPlaySsrc(serverA), "Server A should allocate SSRC #" + i);
@@ -131,6 +148,9 @@ class SSRCFactoryTest {
         String server1 = "server-1";
         String server2 = "server-2";
         String server3 = "server-3";
+        ssrcFactory.markReconciliationReady(rtpServer(server1), new ArrayList<>());
+        ssrcFactory.markReconciliationReady(rtpServer(server2), new ArrayList<>());
+        ssrcFactory.markReconciliationReady(rtpServer(server3), new ArrayList<>());
 
         for (int i = 0; i < 10000; i++) {
             ssrcFactory.getPlaySsrc(server1);
@@ -197,5 +217,159 @@ class SSRCFactoryTest {
 
         String allocated = ssrcFactory.allocatePlayLease(SERVER_ID).getSsrc();
         assertNotNull(allocated);
+    }
+
+    @Test
+    void randomLeases_areOwnedUniqueAndReusableAfterRelease() {
+        MediaServer server = reconciledServer(true);
+
+        Set<String> allocated = new HashSet<>();
+        List<SsrcLease> leases = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            SsrcLease lease = ssrcFactory.allocatePlayLease(server);
+            assertNotNull(lease);
+            assertTrue(lease.isOwned());
+            assertTrue(allocated.add(lease.getSsrc()), "duplicate random SSRC: " + lease.getSsrc());
+            leases.add(lease);
+        }
+        leases.forEach(ssrcFactory::release);
+
+        assertNotNull(ssrcFactory.allocatePlayLease(server));
+    }
+
+    @Test
+    void allocation_isBlockedUntilReconciliationSucceeds() {
+        MediaServer server = rtpServer(SERVER_ID);
+        UserSetting settings = mock(UserSetting.class);
+        when(settings.getSsrcRandom()).thenReturn(false);
+        ReflectionTestUtils.setField(ssrcFactory, "userSetting", settings);
+        ReflectionTestUtils.setField(ssrcFactory, "mediaServerService", mock(IMediaServerService.class));
+        ReflectionTestUtils.setField(ssrcFactory, "zlmresTfulUtils", mock(ZLMRESTfulUtils.class));
+
+        ssrcFactory.markReconciliationFailed(server, "query failed");
+        assertNull(ssrcFactory.allocatePlayLease(server));
+
+        ssrcFactory.markReconciliationReady(server, new ArrayList<>());
+        assertNotNull(ssrcFactory.allocatePlayLease(server));
+    }
+
+    @Test
+    void rebuildFailureBlocksExistingServerUntilQueryRecovers() {
+        MediaServer server = rtpServer(SERVER_ID);
+        IMediaServerService mediaService = mock(IMediaServerService.class);
+        ZLMRESTfulUtils zlm = mock(ZLMRESTfulUtils.class);
+        UserSetting settings = mock(UserSetting.class);
+        when(settings.getSsrcRandom()).thenReturn(false);
+        ReflectionTestUtils.setField(ssrcFactory, "userSetting", settings);
+        ReflectionTestUtils.setField(ssrcFactory, "mediaServerService", mediaService);
+        ReflectionTestUtils.setField(ssrcFactory, "zlmresTfulUtils", zlm);
+        when(mediaService.getAll()).thenReturn(List.of(server));
+        ZLMResult<JSONArray> failed = new ZLMResult<>();
+        failed.setCode(-1);
+        failed.setMsg("zlm unavailable");
+        when(zlm.getMediaList(eq(server), isNull(), isNull(), eq("rtsp"), isNull()))
+                .thenReturn(failed);
+
+        ssrcFactory.rebuild();
+        assertNull(ssrcFactory.allocatePlayLease(server));
+
+        ZLMResult<JSONArray> recovered = new ZLMResult<>();
+        recovered.setCode(0);
+        recovered.setData(new JSONArray());
+        when(zlm.getMediaList(eq(server), isNull(), isNull(), eq("rtsp"), isNull()))
+                .thenReturn(recovered);
+        ssrcFactory.rebuild();
+        assertNotNull(ssrcFactory.allocatePlayLease(server));
+    }
+
+    @Test
+    void rebuildWithSuccessfulNullData_treatsMediaServerAsEmpty() {
+        MediaServer server = rtpServer(SERVER_ID);
+        IMediaServerService mediaService = mock(IMediaServerService.class);
+        ZLMRESTfulUtils zlm = mock(ZLMRESTfulUtils.class);
+        UserSetting settings = mock(UserSetting.class);
+        when(settings.getSsrcRandom()).thenReturn(false);
+        ReflectionTestUtils.setField(ssrcFactory, "userSetting", settings);
+        ReflectionTestUtils.setField(ssrcFactory, "mediaServerService", mediaService);
+        ReflectionTestUtils.setField(ssrcFactory, "zlmresTfulUtils", zlm);
+        when(mediaService.getAll()).thenReturn(List.of(server));
+
+        ZLMResult<JSONArray> empty = new ZLMResult<>();
+        empty.setCode(0);
+        empty.setData(null);
+        when(zlm.getMediaList(eq(server), isNull(), isNull(), eq("rtsp"), isNull()))
+                .thenReturn(empty);
+
+        ssrcFactory.rebuild();
+
+        assertNotNull(ssrcFactory.allocatePlayLease(server));
+    }
+
+    @Test
+    void mediaServerOnlineEvent_retriesReconciliationAfterStartupSettles() throws Exception {
+        SSRCFactory factory = new SSRCFactory();
+        try {
+            ReflectionTestUtils.setField(factory, "domainPart", DOMAIN_PART);
+            MediaServer server = rtpServer(SERVER_ID);
+            IMediaServerService mediaService = mock(IMediaServerService.class);
+            ZLMRESTfulUtils zlm = mock(ZLMRESTfulUtils.class);
+            UserSetting settings = mock(UserSetting.class);
+            when(settings.getSsrcRandom()).thenReturn(false);
+            ReflectionTestUtils.setField(factory, "userSetting", settings);
+            ReflectionTestUtils.setField(factory, "mediaServerService", mediaService);
+            ReflectionTestUtils.setField(factory, "zlmresTfulUtils", zlm);
+            long mediaServerReadyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
+            when(mediaService.getAll()).thenAnswer(invocation ->
+                    System.nanoTime() < mediaServerReadyAt ? List.of() : List.of(server));
+            factory.markReconciliationFailed(server, "startup race");
+
+            ZLMResult<JSONArray> recovered = new ZLMResult<>();
+            recovered.setCode(0);
+            recovered.setData(new JSONArray());
+            CountDownLatch queried = new CountDownLatch(1);
+            when(zlm.getMediaList(eq(server), isNull(), isNull(), eq("rtsp"), isNull()))
+                    .thenAnswer(invocation -> {
+                        queried.countDown();
+                        return recovered;
+                    });
+
+            MediaServerOnlineEvent onlineEvent = new MediaServerOnlineEvent(this);
+            onlineEvent.setMediaServer(server);
+            factory.onMediaServerOnline(onlineEvent);
+
+            assertTrue(queried.await(2, TimeUnit.SECONDS), "online event should trigger reconciliation after startup settles");
+            assertNotNull(factory.allocatePlayLease(server));
+        } finally {
+            Field schedulerField = SSRCFactory.class.getDeclaredField("scheduler");
+            schedulerField.setAccessible(true);
+            ((java.util.concurrent.ScheduledExecutorService) schedulerField.get(factory)).shutdownNow();
+        }
+    }
+
+    @Test
+    void rebuildWithOnlyInvalidServers_blocksAutomaticAllocation() {
+        IMediaServerService mediaService = mock(IMediaServerService.class);
+        ReflectionTestUtils.setField(ssrcFactory, "mediaServerService", mediaService);
+        when(mediaService.getAll()).thenReturn(java.util.Arrays.asList(null, new MediaServer()));
+
+        ssrcFactory.rebuild();
+
+        assertNull(ssrcFactory.allocatePlayLease(SERVER_ID));
+    }
+
+    private MediaServer reconciledServer(boolean random) {
+        MediaServer server = rtpServer(SERVER_ID);
+        UserSetting settings = mock(UserSetting.class);
+        when(settings.getSsrcRandom()).thenReturn(random);
+        ReflectionTestUtils.setField(ssrcFactory, "userSetting", settings);
+        ssrcFactory.markReconciliationReady(server, new ArrayList<>());
+        return server;
+    }
+
+    private MediaServer rtpServer(String id) {
+        MediaServer server = new MediaServer();
+        server.setId(id);
+        server.setRtpEnable(true);
+        return server;
     }
 }

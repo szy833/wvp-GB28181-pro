@@ -137,6 +137,32 @@ class SipInviteSessionManagerTest {
         verify(operations, never()).delete(streamKey);
     }
 
+    @Test
+    void removeByStreamIfSsrcSkipsReplacementOwner() {
+        UserSetting settings = mock(UserSetting.class);
+        when(settings.getServerId()).thenReturn("srv-1");
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        ValueOperations<String, Object> values = mock(ValueOperations.class);
+        SsrcTransaction replacement = transaction("replacement-call", "device-1", "app", "stream-1");
+        replacement.setSsrc("new-ssrc");
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get(any())).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            if (key.contains("STREAM:")) {
+                return "replacement-call";
+            }
+            return replacement;
+        });
+
+        SipInviteSessionManager manager = new SipInviteSessionManager();
+        ReflectionTestUtils.setField(manager, "userSetting", settings);
+        ReflectionTestUtils.setField(manager, "redisTemplate", redis);
+
+        manager.removeByStreamIfSsrc("app", "stream-1", "old-ssrc");
+
+        verify(redis, never()).execute(any(org.springframework.data.redis.core.SessionCallback.class));
+    }
+
     private static SsrcTransaction transaction(String callId, String deviceId, String app, String stream) {
         SsrcTransaction transaction = new SsrcTransaction();
         transaction.setCallId(callId);

@@ -14,8 +14,10 @@ import com.genersoft.iot.vmp.gb28181.dao.PlatformChannelMapper;
 import com.genersoft.iot.vmp.gb28181.event.EventPublisher;
 import com.genersoft.iot.vmp.gb28181.event.channel.ChannelEvent;
 import com.genersoft.iot.vmp.gb28181.event.device.DeviceOfflineEvent;
+import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceService;
 import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
+import com.genersoft.iot.vmp.gb28181.service.IPlayService;
 import com.genersoft.iot.vmp.gb28181.session.AudioBroadcastManager;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
 import com.genersoft.iot.vmp.gb28181.task.deviceStatus.DeviceStatusManager;
@@ -45,6 +47,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -111,6 +114,13 @@ public class DeviceServiceImpl implements IDeviceService {
 
     @Autowired
     private IReceiveRtpServerService receiveRtpServerService;
+
+    @Autowired
+    private IDeviceChannelService deviceChannelService;
+
+    @Autowired
+    @Lazy
+    private IPlayService playService;
 
     @Autowired
     private AudioBroadcastManager audioBroadcastManager;
@@ -265,11 +275,42 @@ public class DeviceServiceImpl implements IDeviceService {
             subscribeTaskRunner.removeSubscribe(SubscribeTaskForAlarm.getKey(device));
         }
         deviceStatusManager.remove(device.getDeviceId());
+        try {
+            // Release in-memory TALK leases even when the Redis send-info lookup is unavailable.
+            playService.stopTalkForDevice(device);
+        } catch (RuntimeException e) {
+            log.warn("[设备离线] 清理对讲 owner 失败：deviceId={}", device.getDeviceId(), e);
+        }
         // 离线释放所有ssrc
         List<SsrcTransaction> ssrcTransactions = sessionManager.getSsrcTransactionByDeviceId(device.getDeviceId());
         if (ssrcTransactions != null && !ssrcTransactions.isEmpty()) {
             for (SsrcTransaction ssrcTransaction : ssrcTransactions) {
-                receiveRtpServerService.closeRTPServerByMediaServerId(ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getStream());
+                if (ssrcTransaction.getType() == com.genersoft.iot.vmp.common.InviteSessionType.TALK) {
+                    DeviceChannel channel = ssrcTransaction.getChannelId() == null ? null
+                            : deviceChannelService.getOneForSourceById(ssrcTransaction.getChannelId());
+                    if (channel != null) {
+                        try {
+                            // TALK transaction.ssrc is the send SSRC; stopTalk uses the tracked owner lease.
+                            playService.stopTalk(device, channel, null);
+                        } catch (RuntimeException e) {
+                            log.warn("[设备离线] 停止对讲资源失败：deviceId={}, channelId={}",
+                                    device.getDeviceId(), channel.getId(), e);
+                        }
+                    } else {
+                        log.warn("[设备离线] TALK 通道不存在，无法执行 owner 清理：deviceId={}, channelId={}",
+                                device.getDeviceId(), ssrcTransaction.getChannelId());
+                    }
+                    sessionManager.removeByCallId(ssrcTransaction.getCallId());
+                    continue;
+                }
+                if (ssrcTransaction.getSsrc() != null) {
+                    receiveRtpServerService.closeRTPServerBySsrcId(
+                            ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getSsrc());
+                }
+                // The SSRC API owns only the listener target; always release
+                // the published business stream separately.
+                receiveRtpServerService.closeRTPServerByBusinessStreamId(
+                        ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getStream());
                 sessionManager.removeByCallId(ssrcTransaction.getCallId());
             }
         }

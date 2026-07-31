@@ -19,6 +19,9 @@ public class RtpResourceContext {
     private final String resourceId;
     private final String businessStreamId;
     private final String zlmStreamId;
+    private volatile String mediaServerId;
+    private volatile String app;
+    private volatile int port = -1;
     private final ErrorCallback<HookData> callback;
     private final Runnable legacyCleanup;
     private volatile Runnable successCleanup = () -> {};
@@ -57,6 +60,24 @@ public class RtpResourceContext {
 
     public String getZlmStreamId() {
         return zlmStreamId;
+    }
+
+    public String getMediaServerId() {
+        return mediaServerId;
+    }
+
+    public String getApp() {
+        return app;
+    }
+
+    public int getPort() {
+        return port;
+    }
+
+    /** Adds log metadata without changing the context construction contract. */
+    public void setOwnerMetadata(String mediaServerId, String app) {
+        this.mediaServerId = mediaServerId;
+        this.app = app;
     }
 
     public RtpResourceState getState() {
@@ -197,6 +218,7 @@ public class RtpResourceContext {
             if (!state.compareAndSet(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA)) {
                 return false;
             }
+            this.port = port;
             logStateTransition(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA,
                     "RTP listener created on port " + port);
             pending = earlyArrival.getAndSet(null);
@@ -309,8 +331,9 @@ public class RtpResourceContext {
     }
 
     private void logStateTransition(RtpResourceState from, RtpResourceState to, String reason) {
-        log.info("[RTP资源状态] resourceId={}, businessStream={}, zlmStream={}, {} -> {}, reason={}",
-                resourceId, businessStreamId, zlmStreamId, from, to, reason);
+        log.info("[RTP资源状态] resourceId={}, businessStream={}, zlmStream={}, mediaServerId={}, app={}, port={}, "
+                        + "{} -> {}, reason={}",
+                resourceId, businessStreamId, zlmStreamId, mediaServerId, app, port, from, to, reason);
     }
 
     private boolean isAllowed(RtpResourceState current, RtpResourceState target) {

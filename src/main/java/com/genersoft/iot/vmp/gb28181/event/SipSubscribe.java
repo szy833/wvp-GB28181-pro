@@ -32,21 +32,18 @@ public class SipSubscribe {
 
     @Scheduled(fixedDelay = 200)   //每200毫秒执行
     public void execute(){
-        while (!delayQueue.isEmpty()) {
-            try {
-                SipEvent take = delayQueue.take();
-                // 出现超时异常
-                if(take.getErrorEvent() != null) {
-                    EventResult<Object> eventResult = new EventResult<>();
-                    eventResult.type = EventResultType.timeout;
-                    eventResult.msg = "消息超时未回复";
-                    eventResult.statusCode = -1024;
-                    take.getErrorEvent().response(eventResult);
-                }
-                subscribes.remove(take.getKey());
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+        SipEvent take;
+        // poll() only returns expired events, so a future event cannot block the scheduler.
+        while ((take = delayQueue.poll()) != null) {
+            // 出现超时异常
+            if(take.getErrorEvent() != null) {
+                EventResult<Object> eventResult = new EventResult<>();
+                eventResult.type = EventResultType.timeout;
+                eventResult.msg = "消息超时未回复";
+                eventResult.statusCode = -1024;
+                take.getErrorEvent().response(eventResult);
             }
+            subscribes.remove(take.getKey());
         }
     }
 

@@ -23,17 +23,14 @@ public class MessageSubscribe {
 
     @Scheduled(fixedDelay = 200)   //每200毫秒执行
     public void execute(){
-        while (!delayQueue.isEmpty()) {
-            try {
-                MessageEvent<?> take = delayQueue.take();
-                // 出现超时异常
-                if(take.getCallback() != null) {
-                    take.getCallback().run(ErrorCode.ERROR486.getCode(), "消息超时未回复", null);
-                }
-                subscribes.remove(take.getKey());
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+        MessageEvent<?> take;
+        // poll() only returns expired events, so a future event cannot block the scheduler.
+        while ((take = delayQueue.poll()) != null) {
+            // 出现超时异常
+            if(take.getCallback() != null) {
+                take.getCallback().run(ErrorCode.ERROR486.getCode(), "消息超时未回复", null);
             }
+            subscribes.remove(take.getKey());
         }
     }
 

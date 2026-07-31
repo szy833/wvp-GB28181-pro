@@ -222,6 +222,34 @@ public class SipInviteSessionManager {
         });
     }
 
+    /** 删除流会话，但仅当当前 owner 的 SSRC 与调用方一致时执行。 */
+    public void removeByStreamIfSsrc(String app, String stream, String expectedSsrc) {
+        if (isBlank(expectedSsrc)) {
+            return;
+        }
+        SsrcTransaction transaction = getSsrcTransactionByStream(app, stream);
+        if (transaction == null || !expectedSsrc.equals(transaction.getSsrc())
+                || isBlank(transaction.getCallId())) {
+            return;
+        }
+        String streamKey = streamKey(app, stream);
+        String callId = transaction.getCallId();
+        executeTransaction(operations -> {
+            operations.watch(List.of(streamKey, dataKey(callId)));
+            String owner = asString(operations.opsForValue().get(streamKey));
+            if (!callId.equals(owner)) {
+                return true;
+            }
+            SsrcTransaction current = asTransaction(operations.opsForValue().get(dataKey(callId)));
+            if (current == null || !expectedSsrc.equals(current.getSsrc())) {
+                return true;
+            }
+            operations.multi();
+            queueDeleteSession(operations, current, callId, true);
+            return operations.exec() != null;
+        });
+    }
+
     /** 删除 Call-ID 对应会话，重复调用安全。 */
     public void removeByCallId(String callId) {
         if (isBlank(callId)) {

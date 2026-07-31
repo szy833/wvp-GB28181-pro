@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.UUID;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 
 @Slf4j
@@ -151,7 +152,9 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
         }
 
         RtpResourceContext context = resourceOwners.get(resourceOwnerKey(mediaServerId, app, event.getStream()));
-        if (context != null && event.getStream().equals(context.getZlmStreamId())) {
+        if (context != null && (event.getStream().equals(context.getBusinessStreamId())
+                || (context.getZlmStreamId() != null
+                && event.getStream().equalsIgnoreCase(context.getZlmStreamId())))) {
             return context;
         }
         return null;
@@ -179,6 +182,21 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
     private String resourceOwnerKey(String mediaServerId, String app, String stream) {
         return mediaServerId + ":" + app + ":" + stream;
+    }
+
+    /** Parses an SSRC before publishing any owner state, releasing a lease on malformed input. */
+    private Long parseSsrcOrRelease(String ssrc, SsrcLease lease,
+                                    ErrorCallback<OpenRTPServerResult> callback, String operation) {
+        try {
+            return Long.parseLong(ssrc);
+        } catch (NumberFormatException e) {
+            if (lease != null) {
+                ssrcFactory.release(lease);
+            }
+            log.warn("{} 失败，SSRC格式非法，已释放租约：{}", operation, ssrc);
+            callback.run(InviteErrorCode.FAIL.getCode(), "SSRC格式非法", null);
+            return null;
+        }
     }
 
     @Override
@@ -209,8 +227,12 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getCode(), InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getMsg(), null);
             return null;
         }
+        Long ssrcValue = parseSsrcOrRelease(ssrc, lease, callback, "开启国标RTP收流");
+        if (ssrcValue == null) {
+            return null;
+        }
         if (streamId == null) {
-            streamId = String.format("%08x", Long.parseLong(ssrc)).toUpperCase();
+            streamId = String.format("%08x", ssrcValue).toUpperCase();
         }
         if (ssrcCheck && tcpMode > 0) {
             // 目前zlm不支持 tcp模式更新ssrc，暂时关闭ssrc校验
@@ -219,7 +241,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
         SSRCInfo ssrcInfo = new SSRCInfo(0, ssrc, MediaStreamUtil.RTP_APP, streamId);
         ssrcInfo.setMediaServerId(mediaServer.getId());
-        RTPServerParam rtpServerParam = new RTPServerParam(mediaServer, MediaStreamUtil.RTP_APP, streamId, Long.parseLong(ssrc), null, onlyAuto, disableAuto, false, tcpMode);
+        RTPServerParam rtpServerParam = new RTPServerParam(mediaServer, MediaStreamUtil.RTP_APP, streamId, ssrcValue, null, onlyAuto, disableAuto, false, tcpMode);
         rtpServerParam.setSsrcLease(lease);
         rtpServerParam.setSsrcCheck(ssrcCheck);
         RtpServerOpenResult openResult = openCommonRTPServerWithHandle(rtpServerParam, ((code, msg, data) -> {
@@ -252,6 +274,16 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.FAIL.getCode(), "媒体节点为NULL", null);
             return null;
         }
+        if (device == null || channel == null || device.getDeviceId() == null
+                || channel.getDeviceId() == null || device.getStreamMode() == null) {
+            log.warn("[开启国标点播RTP收流] 失败，设备或通道参数不完整");
+            callback.run(InviteErrorCode.FAIL.getCode(), "设备或通道参数不完整", null);
+            return null;
+        }
+
+        String streamReplace = String.format("%s_%s", device.getDeviceId(), channel.getDeviceId());
+        int tcpMode = device.getStreamMode().equals("TCP-ACTIVE") ? 2
+                : (device.getStreamMode().equals("TCP-PASSIVE") ? 1 : 0);
 
         // 获取 mediaServer 可用的 ssrc
         final String ssrc;
@@ -267,11 +299,12 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getCode(), InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getMsg(), null);
             return null;
         }
+        Long ssrcValue = parseSsrcOrRelease(ssrc, lease, callback, "开启国标点播RTP收流");
+        if (ssrcValue == null) {
+            return null;
+        }
 
-        String streamId = String.format("%08x", Long.parseLong(ssrc)).toUpperCase();
-        String streamReplace = String.format("%s_%s", device.getDeviceId(), channel.getDeviceId());
-
-        int tcpMode = device.getStreamMode().equals("TCP-ACTIVE")? 2: (device.getStreamMode().equals("TCP-PASSIVE")? 1:0);
+        String streamId = String.format("%08x", ssrcValue).toUpperCase();
 
         if (device.isSsrcCheck() && tcpMode > 0) {
             log.warn("[开启国标点播RTP收流] 平台对接时下级可能自定义ssrc，但是tcp模式zlm收流目前无法更新ssrc，可能收流超时，此时请使用udp收流或者关闭ssrc校验");
@@ -279,7 +312,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
         SSRCInfo ssrcInfo = new SSRCInfo(0, ssrc, MediaStreamUtil.RTP_APP, streamReplace);
         ssrcInfo.setMediaServerId(mediaServer.getId());
-        RtpServerOpenResult holder = openRtpServer(mediaServer, ssrcInfo, lease, Long.parseLong(ssrc), !channel.isHasAudio(), false, tcpMode, callback, device.isSsrcCheck());
+        RtpServerOpenResult holder = openRtpServer(mediaServer, ssrcInfo, lease, ssrcValue, !channel.isHasAudio(), false, tcpMode, callback, device.isSsrcCheck());
         if (holder != null && holder.isSuccess()) {
             addAuthenticateInfo(holder, streamId, streamReplace, channel.isHasAudio(), record, null);
         }
@@ -298,6 +331,24 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.FAIL.getCode(), "媒体节点为NULL", null);
             return null;
         }
+        if (device == null || channel == null || device.getDeviceId() == null
+                || channel.getDeviceId() == null || device.getStreamMode() == null
+                || startTime == null || endTime == null) {
+            log.warn("[开启国标回放RTP收流] 失败，设备、通道或时间参数不完整");
+            callback.run(InviteErrorCode.FAIL.getCode(), "设备、通道或时间参数不完整", null);
+            return null;
+        }
+
+        final String streamReplace;
+        try {
+            streamReplace = getPlaybackStream(device, channel, startTime, endTime);
+        } catch (RuntimeException e) {
+            log.warn("[开启国标回放RTP收流] 失败，时间参数无效", e);
+            callback.run(InviteErrorCode.FAIL.getCode(), "时间参数无效", null);
+            return null;
+        }
+        int tcpMode = device.getStreamMode().equals("TCP-ACTIVE") ? 2
+                : (device.getStreamMode().equals("TCP-PASSIVE") ? 1 : 0);
 
         // 获取 mediaServer 可用的 ssrc
         SsrcLease lease = ssrcFactory.allocatePlaybackLease(mediaServer);
@@ -306,11 +357,12 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getCode(), InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getMsg(), null);
             return null;
         }
+        Long ssrcValue = parseSsrcOrRelease(ssrc, lease, callback, "开启国标回放RTP收流");
+        if (ssrcValue == null) {
+            return null;
+        }
 
-        String streamId = String.format("%08x", Long.parseLong(ssrc)).toUpperCase();
-        String streamReplace = getPlaybackStream(device, channel, startTime, endTime);
-
-        int tcpMode = device.getStreamMode().equals("TCP-ACTIVE")? 2: (device.getStreamMode().equals("TCP-PASSIVE")? 1:0);
+        String streamId = String.format("%08x", ssrcValue).toUpperCase();
 
         if (device.isSsrcCheck() && tcpMode > 0) {
             log.warn("[开启国标回放RTP收流] 平台对接时下级可能自定义ssrc，但是tcp模式zlm收流目前无法更新ssrc，可能收流超时，此时请使用udp收流或者关闭ssrc校验");
@@ -318,7 +370,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
         SSRCInfo ssrcInfo = new SSRCInfo(0, ssrc, MediaStreamUtil.RTP_APP, streamReplace);
         ssrcInfo.setMediaServerId(mediaServer.getId());
-        RtpServerOpenResult openResult = openRtpServer(mediaServer, ssrcInfo, lease, Long.parseLong(ssrc), !channel.isHasAudio(), false, tcpMode, callback, device.isSsrcCheck());
+        RtpServerOpenResult openResult = openRtpServer(mediaServer, ssrcInfo, lease, ssrcValue, !channel.isHasAudio(), false, tcpMode, callback, device.isSsrcCheck());
         if (openResult.isSuccess()) {
             addAuthenticateInfo(openResult, streamId, streamReplace, channel.isHasAudio(), false,null);
         }
@@ -349,6 +401,26 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.FAIL.getCode(), "媒体节点为NULL", null);
             return null;
         }
+        if (device == null || channel == null || device.getDeviceId() == null
+                || channel.getDeviceId() == null || device.getStreamMode() == null
+                || startTime == null || endTime == null) {
+            log.warn("[开启国标录像下载RTP收流] 失败，设备、通道或时间参数不完整");
+            callback.run(InviteErrorCode.FAIL.getCode(), "设备、通道或时间参数不完整", null);
+            return null;
+        }
+
+        final String streamReplace;
+        final long difference;
+        try {
+            streamReplace = String.format("%s_%s_%s_%s", device.getDeviceId(), channel.getDeviceId(),
+                    startTime.replace("-", "").replace(":", "").replace(" ", ""),
+                    endTime.replace("-", "").replace(":", "").replace(" ", ""));
+            difference = DateUtil.getDifference(startTime, endTime) / 1000;
+        } catch (RuntimeException e) {
+            log.warn("[开启国标录像下载RTP收流] 失败，时间参数无效", e);
+            callback.run(InviteErrorCode.FAIL.getCode(), "时间参数无效", null);
+            return null;
+        }
 
         int tcpMode = device.getStreamMode().equals("TCP-ACTIVE")? 2: (device.getStreamMode().equals("TCP-PASSIVE")? 1:0);
 
@@ -359,11 +431,12 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getCode(), InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getMsg(), null);
             return null;
         }
+        Long ssrcValue = parseSsrcOrRelease(ssrc, lease, callback, "开启国标录像下载RTP收流");
+        if (ssrcValue == null) {
+            return null;
+        }
 
-        String streamId = String.format("%08x", Long.parseLong(ssrc)).toUpperCase();
-        String streamReplace = String.format("%s_%s_%s_%s", device.getDeviceId(), channel.getDeviceId(),
-                startTime.replace("-", "").replace(":", "").replace(" ", ""),
-                endTime.replace("-", "").replace(":", "").replace(" ", ""));
+        String streamId = String.format("%08x", ssrcValue).toUpperCase();
 
         if (device.isSsrcCheck() && tcpMode > 0) {
             log.warn("[开启国标录像下载RTP收流] 平台对接时下级可能自定义ssrc，但是tcp模式zlm收流目前无法更新ssrc，可能收流超时，此时请使用udp收流或者关闭ssrc校验");
@@ -371,9 +444,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
         SSRCInfo ssrcInfo = new SSRCInfo(0, ssrc, MediaStreamUtil.RTP_APP, streamReplace);
         ssrcInfo.setMediaServerId(mediaServer.getId());
-        RtpServerOpenResult openResult = openRtpServer(mediaServer, ssrcInfo, lease, Long.parseLong(ssrc), !channel.isHasAudio(), false, tcpMode, callback, device.isSsrcCheck());
-
-        long difference = DateUtil.getDifference(startTime, endTime) / 1000;
+        RtpServerOpenResult openResult = openRtpServer(mediaServer, ssrcInfo, lease, ssrcValue, !channel.isHasAudio(), false, tcpMode, callback, device.isSsrcCheck());
 
         if (openResult.isSuccess()) {
             addAuthenticateInfo(openResult, streamId, streamReplace, channel.isHasAudio(), true,  (int) difference);
@@ -391,6 +462,12 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
         if (mediaServer == null) {
             log.warn("[开启国标喊话RTP收流] 失败，媒体节点为NULL");
             callback.run(InviteErrorCode.FAIL.getCode(), "媒体节点为NULL", null);
+            return null;
+        }
+        if (platform == null || channel == null || platform.getServerGBId() == null
+                || channel.getGbDeviceId() == null) {
+            log.warn("[开启国标喊话RTP收流] 失败，平台或通道参数不完整");
+            callback.run(InviteErrorCode.FAIL.getCode(), "平台或通道参数不完整", null);
             return null;
         }
 
@@ -415,10 +492,14 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             callback.run(InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getCode(), InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getMsg(), null);
             return null;
         }
+        Long ssrcValue = parseSsrcOrRelease(ssrc, lease, callback, "开启国标喊话RTP收流");
+        if (ssrcValue == null) {
+            return null;
+        }
 
         SSRCInfo ssrcInfo = new SSRCInfo(0, ssrc, MediaStreamUtil.RTP_APP, streamId);
         ssrcInfo.setMediaServerId(mediaServer.getId());
-        openRtpServer(mediaServer, ssrcInfo, lease, Long.parseLong(ssrc), false, true, tcpMode, callback, false);
+        openRtpServer(mediaServer, ssrcInfo, lease, ssrcValue, false, true, tcpMode, callback, false);
         return ssrcInfo;
     }
 
@@ -500,6 +581,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
         final AtomicBoolean creationFinished = new AtomicBoolean(false);
         final RtpResourceContext context = new RtpResourceContext(resourceId, businessStreamId, zlmStreamId,
                 callback, () -> {});
+        context.setOwnerMetadata(mediaServer.getId(), param.getApp());
         activeResources.put(resourceId, context);
         final String ownerKey = mediaServer.getId() + ":" + param.getApp() + ":" + businessStreamId;
         final String zlmOwnerKey = mediaServer.getId() + ":" + param.getApp() + ":" + zlmStreamId;
@@ -511,12 +593,8 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             try { context.cleanupRegisteredResources(); }
             catch (Exception e) { log.debug("清理RTP任务和Hook失败", e); }
             if (mayHaveCreatedInZlm.get() && resourceOwners.get(ownerKey) == context) {
-                if (mediaServer.isRtpEnable()) {
-                    try { mediaServerService.closeRTPServer(mediaServer, param.getApp(), zlmStreamId); }
-                    catch (Exception e) { log.warn("回滚RTP Server失败: {}", e.getMessage()); }
-                }
-                try { mediaServerService.closeStreams(mediaServer, param.getApp(), zlmStreamId); }
-                catch (Exception e) { log.warn("回滚媒体流失败: {}", e.getMessage()); }
+                closeOwnedMediaResources(context, mediaServer, param.getApp(), zlmStreamId,
+                        businessStreamId, "terminal cleanup");
             }
             try {
                 synchronized (context) {
@@ -653,18 +731,48 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                                      String ownerKey, String zlmOwnerKey, String resourceId,
                                      RtpResourceContext context, String taskKey, SsrcLease lease) {
         if (resourceOwners.get(ownerKey) == context) {
-            if (mediaServer.isRtpEnable()) {
-                try { mediaServerService.closeRTPServer(mediaServer, app, zlmStreamId); }
-                catch (Exception e) { log.warn("关闭延迟创建的RTP Server失败: {}", e.getMessage()); }
-            }
-            try { mediaServerService.closeStreams(mediaServer, app, zlmStreamId); }
-            catch (Exception e) { log.warn("关闭延迟创建的媒体流失败: {}", e.getMessage()); }
+            closeOwnedMediaResources(context, mediaServer, app, zlmStreamId,
+                    context.getBusinessStreamId(), "late creation cleanup");
         }
         try { context.cleanupRegisteredResources(); }
         catch (Exception e) { log.debug("清理延迟创建任务和Hook失败", e); }
         try { ssrcFactory.release(lease); }
         catch (Exception e) { log.warn("释放延迟创建SSRC失败: {}", e.getMessage()); }
         removeResourceIndexes(resourceId, ownerKey, zlmOwnerKey, context);
+    }
+
+    private void closeOwnedMediaResources(RtpResourceContext context, MediaServer mediaServer, String app,
+                                          String zlmStream, String businessStream, String closeReason) {
+        // The media service close API is void, so zlmCloseHit records a
+        // successful request, not a server-side deletion response.
+        boolean zlmCloseHit = false;
+        if (mediaServer != null && mediaServer.isRtpEnable()) {
+            try {
+                mediaServerService.closeRTPServer(mediaServer, app, zlmStream);
+                zlmCloseHit = true;
+            } catch (RuntimeException e) {
+                log.warn("[RTP资源关闭] ZLM listener关闭失败：resourceId={}, businessStream={}, zlmStream={}, "
+                                + "mediaServerId={}, port={}, closeReason={}, closeTargetType=OWNER",
+                        context == null ? null : context.getResourceId(), businessStream, zlmStream,
+                        mediaServer.getId(), context == null ? null : context.getPort(), closeReason, e);
+            }
+        }
+        try {
+            if (mediaServer != null && businessStream != null) {
+                mediaServerService.closeStreams(mediaServer, app, businessStream);
+            }
+        } catch (RuntimeException e) {
+            log.warn("[RTP资源关闭] 业务流关闭失败：resourceId={}, businessStream={}, zlmStream={}, "
+                            + "mediaServerId={}, port={}, closeReason={}, closeTargetType=OWNER",
+                    context == null ? null : context.getResourceId(), businessStream, zlmStream,
+                    mediaServer == null ? null : mediaServer.getId(), context == null ? null : context.getPort(),
+                    closeReason, e);
+        }
+        log.info("[RTP资源关闭] resourceId={}, businessStream={}, zlmStream={}, mediaServerId={}, port={}, "
+                        + "closeReason={}, closeTargetType=OWNER, zlmCloseHit={}",
+                context == null ? null : context.getResourceId(), businessStream, zlmStream,
+                mediaServer == null ? null : mediaServer.getId(), context == null ? null : context.getPort(),
+                closeReason, zlmCloseHit);
     }
 
     private void removeResourceIndexes(String resourceId, String ownerKey, String zlmOwnerKey,
@@ -690,43 +798,239 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
     @Override
     public void closeRTPServer(SSRCInfo info) {
-        if (info == null) return;
+        closeRtpResource(info);
+    }
+
+    @Override
+    public boolean closeRtpResource(SSRCInfo info) {
+        if (info == null) return false;
+        String app = info.getApp() == null ? MediaStreamUtil.RTP_APP : info.getApp();
         if (info.getResourceId() != null) {
             RtpResourceContext context = activeResources.get(info.getResourceId());
             if (context != null) {
                 context.close("owner close");
+                return true;
             }
-            // A stale owner must never fall back to an unqualified stream close;
-            // that key may already belong to a newer RTP resource.
-            return;
+            // A stale owner must never close a listener by business stream. A
+            // published stream may still be cleaned when no newer owner claims it.
+            closeStaleBusinessStream(info, app, "stale owner");
+            return false;
         }
         if (info.getMediaServerId() != null) {
             MediaServer server = mediaServerService.getOne(info.getMediaServerId());
             if (server != null) {
-                String zlmStream = info.getZlmStream() == null ? info.getStream() : info.getZlmStream();
-                closeRTPServer(server, info.getApp(), zlmStream);
+                if (info.getZlmStream() != null && !info.getZlmStream().isEmpty()) {
+                    String zlmOwnerKey = resourceOwnerKey(server.getId(), app, info.getZlmStream());
+                    boolean hadOwner = resourceOwners.get(zlmOwnerKey) != null;
+                    if (hadOwner) {
+                        // A persisted SSRCInfo without a resource handle cannot
+                        // prove that it owns the currently tracked listener.
+                        // Never let a stale record close a newer owner.
+                        log.warn("[RTP资源对账] 跳过无owner句柄的ZLM listener关闭：mediaServer={}, app={}, zlmStream={}",
+                                server.getId(), app, info.getZlmStream());
+                        return false;
+                    }
+                    boolean listenerClosed = closeRTPServerByZlmStream(server, app, info.getZlmStream());
+                    if (listenerClosed && !hadOwner && info.getStream() != null
+                            && resourceOwners.get(resourceOwnerKey(server.getId(), app, info.getStream())) == null) {
+                        closeUnownedBusinessStream(server, app, info.getStream(), info.getResourceId(),
+                                info.getZlmStream(), info.getPort(), "legacy zlm stream close");
+                    }
+                    return listenerClosed;
+                }
+                if (info.getSsrc() != null) {
+                    boolean listenerClosed = closeRTPServerBySsrcId(
+                            info.getMediaServerId(), app, info.getSsrc());
+                    if (listenerClosed) {
+                        closeUnownedBusinessStream(server, app, info.getStream(), info.getResourceId(),
+                                null, info.getPort(), "legacy SSRC close");
+                        return true;
+                    }
+                }
+                // A legacy record without a validated listener id may only
+                // clean an unowned business stream; never terminate a newer
+                // owner merely because listener reconciliation failed.
+                return closeRTPServerByBusinessStreamIfUnowned(server, app, info.getStream());
             }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean closeRTPServerByZlmStream(MediaServer mediaServer, String app, String zlmStream) {
+        if (mediaServer == null || app == null || zlmStream == null || zlmStream.isEmpty()) {
+            return false;
+        }
+        RtpResourceContext owned = resourceOwners.get(resourceOwnerKey(mediaServer.getId(), app, zlmStream));
+        if (owned != null) {
+            owned.close("zlm stream close");
+            return true;
+        }
+        try {
+            if (mediaServer.isRtpEnable()) {
+                mediaServerService.closeRTPServer(mediaServer, app, zlmStream);
+            } else {
+                mediaServerService.closeStreams(mediaServer, app, zlmStream);
+            }
+            // IMediaServerService exposes a void close API; true means the
+            // close request completed without throwing, not a ZLM hit count.
+            log.info("[RTP资源关闭] resourceId=null, businessStream=null, zlmStream={}, mediaServerId={}, port=null, "
+                            + "closeReason=zlm stream close, closeTargetType=ZLM_STREAM, zlmCloseHit={}",
+                    zlmStream, mediaServer.getId(), mediaServer.isRtpEnable());
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("[RTP资源关闭] ZLM stream关闭失败：mediaServer={}, app={}, zlmStream={}",
+                    mediaServer.getId(), app, zlmStream, e);
+            return false;
         }
     }
 
     @Override
-    public void closeRTPServer(MediaServer mediaServer, String app, String stream) {
+    public boolean closeRTPServerByBusinessStream(MediaServer mediaServer, String app, String businessStream) {
+        if (mediaServer == null || app == null || businessStream == null || businessStream.isEmpty()) {
+            return false;
+        }
+        RtpResourceContext owned = resourceOwners.get(resourceOwnerKey(mediaServer.getId(), app, businessStream));
+        if (owned != null) {
+            owned.close("business stream close");
+            return true;
+        }
+        try {
+            stopBusinessTimeoutTask(mediaServer, app, businessStream);
+            // Closing the published stream is safe, but the business id is not
+            // sufficient to identify a multi-port RTP listener.
+            mediaServerService.closeStreams(mediaServer, app, businessStream);
+            log.warn("[RTP资源关闭] resourceId=null, businessStream={}, zlmStream=null, mediaServerId={}, port=null, "
+                            + "closeReason=business stream close, closeTargetType=BUSINESS_STREAM, zlmCloseHit=false; "
+                            + "未找到资源owner，未猜测ZLM RTP listener",
+                    businessStream, mediaServer.getId());
+        } catch (RuntimeException e) {
+            log.warn("[RTP资源关闭] 业务流关闭失败：mediaServer={}, app={}, businessStream={}",
+                    mediaServer.getId(), app, businessStream, e);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean closeRTPServerByBusinessStreamIfUnowned(MediaServer mediaServer, String app,
+                                                            String businessStream) {
+        if (mediaServer == null || app == null || businessStream == null || businessStream.isEmpty()) {
+            return false;
+        }
+        return closeUnownedBusinessStream(mediaServer, app, businessStream, null, null, -1,
+                "legacy business stream close");
+    }
+
+    private void closeStaleBusinessStream(SSRCInfo info, String app, String closeReason) {
+        if (info.getMediaServerId() == null || info.getStream() == null || mediaServerService == null) {
+            return;
+        }
+        MediaServer mediaServer = mediaServerService.getOne(info.getMediaServerId());
         if (mediaServer == null) {
             return;
         }
-        RtpResourceContext owned = resourceOwners.get(mediaServer.getId() + ":" + app + ":" + stream);
-        if (owned != null) {
-            owned.close("legacy close");
+        closeUnownedBusinessStream(mediaServer, app, info.getStream(), info.getResourceId(),
+                info.getZlmStream(), info.getPort(), closeReason);
+    }
+
+    private boolean closeUnownedBusinessStream(MediaServer mediaServer, String app, String businessStream,
+                                               String resourceId, String zlmStream, int port, String closeReason) {
+        if (businessStream == null) {
+            return false;
+        }
+        String ownerKey = resourceOwnerKey(mediaServer.getId(), app, businessStream);
+        if (resourceOwners.get(ownerKey) != null) {
+            log.warn("[RTP资源关闭] 跳过无主业务流关闭：resourceId={}, businessStream={}, zlmStream={}, "
+                            + "mediaServerId={}, port={}, closeReason={}, closeTargetType=BUSINESS_STREAM, zlmCloseHit=false",
+                    resourceId, businessStream, zlmStream, mediaServer.getId(), port, closeReason);
+            return false;
+        }
+        try {
+            stopBusinessTimeoutTask(mediaServer, app, businessStream);
+            mediaServerService.closeStreams(mediaServer, app, businessStream);
+            log.warn("[RTP资源关闭] 仅清理过期owner对应业务流：resourceId={}, businessStream={}, zlmStream={}, "
+                            + "mediaServerId={}, port={}, closeReason={}, closeTargetType=BUSINESS_STREAM, zlmCloseHit=false",
+                    resourceId, businessStream, zlmStream, mediaServer.getId(), port, closeReason);
+        } catch (RuntimeException e) {
+            log.warn("[RTP资源关闭] 过期owner业务流关闭失败：resourceId={}, businessStream={}, mediaServerId={}",
+                    resourceId, businessStream, mediaServer.getId(), e);
+            return false;
+        }
+        return true;
+    }
+
+    private void stopBusinessTimeoutTask(MediaServer mediaServer, String app, String businessStream) {
+        if (mediaServer == null || app == null || businessStream == null || dynamicTask == null) {
             return;
         }
-        String timeOutTaskKey = String.format("%s_%s_%s_%s", TIMEOUT_TASK_KEY_PREFIX, mediaServer.getId(), app, stream);
-        if (dynamicTask.contains(timeOutTaskKey)) {
-            dynamicTask.stop(timeOutTaskKey);
+        String timeoutTaskKey = String.format("%s_%s_%s_%s", TIMEOUT_TASK_KEY_PREFIX,
+                mediaServer.getId(), app, businessStream);
+        if (dynamicTask.contains(timeoutTaskKey)) {
+            dynamicTask.stop(timeoutTaskKey);
         }
-        if (mediaServer.isRtpEnable()) {
-            mediaServerService.closeRTPServer(mediaServer, app, stream);
+    }
+
+    @Override
+    public boolean closeRTPServerByZlmStreamId(String mediaServerId, String app, String zlmStream) {
+        MediaServer mediaServer = mediaServerId == null ? null : mediaServerService.getOne(mediaServerId);
+        return closeRTPServerByZlmStream(mediaServer, app, zlmStream);
+    }
+
+    @Override
+    public boolean closeRTPServerByBusinessStreamId(String mediaServerId, String app, String businessStream) {
+        MediaServer mediaServer = mediaServerId == null ? null : mediaServerService.getOne(mediaServerId);
+        // Callers using only a legacy stream id have no owner token. Keep
+        // device-offline cleanup from closing a newer resource that reused
+        // the same business stream.
+        return closeRTPServerByBusinessStreamIfUnowned(mediaServer, app, businessStream);
+    }
+
+    @Override
+    public boolean closeRTPServerBySsrcId(String mediaServerId, String app, String ssrc) {
+        MediaServer mediaServer = mediaServerId == null ? null : mediaServerService.getOne(mediaServerId);
+        if (mediaServer == null || !mediaServer.isRtpEnable() || app == null || ssrc == null || ssrc.isEmpty()) {
+            return false;
         }
-        mediaServerService.closeStreams(mediaServer, app, stream);
+        final String zlmStream;
+        try {
+            long value = Long.parseUnsignedLong(ssrc);
+            if (value > 0xFFFFFFFFL) {
+                throw new NumberFormatException("SSRC exceeds unsigned 32-bit range");
+            }
+            zlmStream = String.format(Locale.ROOT, "%08X", value);
+        } catch (NumberFormatException e) {
+            log.warn("[RTP资源对账] SSRC无法转换为ZLM stream：mediaServer={}, app={}, ssrc={}",
+                    mediaServerId, app, ssrc);
+            return false;
+        }
+        if (resourceOwners.get(resourceOwnerKey(mediaServer.getId(), app, zlmStream)) != null) {
+            // Without a business stream or resource handle, do not let a
+            // legacy SSRC close a newer tracked owner that reused the id.
+            log.warn("[RTP资源对账] SSRC对应listener已有当前owner，跳过无主关闭：mediaServer={}, app={}, zlmStream={}",
+                    mediaServerId, app, zlmStream);
+            return false;
+        }
+        List<String> listeners;
+        try {
+            listeners = mediaServerService.listRtpServer(mediaServer);
+        } catch (RuntimeException e) {
+            log.warn("[RTP资源对账] 查询ZLM RTP listener失败：mediaServer={}, app={}, zlmStream={}",
+                    mediaServerId, app, zlmStream, e);
+            return false;
+        }
+        if (listeners == null || listeners.stream().noneMatch(item -> zlmStream.equalsIgnoreCase(item))) {
+            log.warn("[RTP资源对账] 未找到待关闭的ZLM RTP listener：mediaServer={}, app={}, zlmStream={}",
+                    mediaServerId, app, zlmStream);
+            return false;
+        }
+        return closeRTPServerByZlmStream(mediaServer, app, zlmStream);
+    }
+
+    @Override
+    public void closeRTPServer(MediaServer mediaServer, String app, String stream) {
+        // The legacy overload is a business-stream operation. Callers that
+        // possess a ZLM listener id must use closeRTPServerByZlmStream(...).
+        closeRTPServerByBusinessStream(mediaServer, app, stream);
     }
 
     @Override

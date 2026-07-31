@@ -44,7 +44,7 @@ class PlayServiceImplStopTest {
         assertTrue(service.stopIfOwner(invite));
 
         verify(invites).removeInviteInfoIfSame(invite);
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -85,7 +85,7 @@ class PlayServiceImplStopTest {
                 rtp, mock(UserSetting.class), mock(SipInviteSessionManager.class));
         InviteInfo invite = invite(device(), channel());
         when(invites.removeInviteInfoIfSame(invite)).thenReturn(true);
-        doThrow(new IllegalStateException("rtp close failed")).when(rtp).closeRTPServer(invite.getSsrcInfo());
+        doThrow(new IllegalStateException("rtp close failed")).when(rtp).closeRtpResource(invite.getSsrcInfo());
 
         assertFalse(service.stopIfOwner(invite));
 
@@ -114,7 +114,7 @@ class PlayServiceImplStopTest {
 
         verify(invites).removeInviteInfoIfSame(invite);
         verify(invites, never()).getAllInviteInfo();
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -140,7 +140,7 @@ class PlayServiceImplStopTest {
         service.zlmServerOnline(streamMediaServer);
 
         verify(invites).removeInviteInfoIfSame(invite);
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -168,7 +168,7 @@ class PlayServiceImplStopTest {
         service.zlmServerOnline(mediaServer);
 
         verify(invites).removeInviteInfoIfSame(invite);
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -192,7 +192,7 @@ class PlayServiceImplStopTest {
         assertDoesNotThrow(() -> service.stop(InviteSessionType.PLAY, device, channel, "stream-1"));
 
         verify(channels).stopPlay(channel.getId());
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -210,7 +210,7 @@ class PlayServiceImplStopTest {
 
         assertDoesNotThrow(() -> service.stop(InviteSessionType.PLAY, device, channel, "stream-1"));
 
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -229,7 +229,7 @@ class PlayServiceImplStopTest {
         assertDoesNotThrow(() -> service.stop(invite));
 
         verify(invites).removeInviteInfo(invite);
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
         verifyNoInteractions(devices);
     }
 
@@ -254,7 +254,7 @@ class PlayServiceImplStopTest {
         assertDoesNotThrow(() -> service.stop(InviteSessionType.PLAY, device, channel, "stream-1"));
 
         verify(sessions).removeByStream(MediaStreamUtil.RTP_APP, "stream-1");
-        verify(rtp).closeRTPServer(invite.getSsrcInfo());
+        verify(rtp).closeRtpResource(invite.getSsrcInfo());
     }
 
     @Test
@@ -273,11 +273,30 @@ class PlayServiceImplStopTest {
         when(sessions.getSsrcTransactionByStream(MediaStreamUtil.RTP_APP, "stream-1"))
                 .thenReturn(transaction);
         SSRCInfo ssrcInfo = invite.getSsrcInfo();
-        doThrow(new IllegalStateException("rtp close failed")).when(rtp).closeRTPServer(ssrcInfo);
+        doThrow(new IllegalStateException("rtp close failed")).when(rtp).closeRtpResource(ssrcInfo);
 
         assertDoesNotThrow(() -> service.stop(InviteSessionType.PLAY, device, channel, "stream-1"));
 
         verify(sessions).removeByStream(MediaStreamUtil.RTP_APP, "stream-1");
+    }
+
+    @Test
+    void stalePlayFailureDoesNotRemoveReplacementInvite() {
+        IInviteStreamService invites = mock(IInviteStreamService.class);
+        PlayServiceImpl service = service(invites, mock(ISIPCommander.class), mock(IDeviceChannelService.class),
+                mock(IReceiveRtpServerService.class), mock(UserSetting.class), mock(SipInviteSessionManager.class));
+        Device device = device();
+        DeviceChannel channel = channel();
+        InviteInfo replacement = invite(device, channel);
+        replacement.getSsrcInfo().setResourceId("new-resource");
+        SSRCInfo staleOwner = new SSRCInfo(1235, "00000002", MediaStreamUtil.RTP_APP, "stream-1");
+        staleOwner.setResourceId("old-resource");
+        when(invites.getInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId()))
+                .thenReturn(replacement);
+
+        ReflectionTestUtils.invokeMethod(service, "removePlayInviteInfoIfOwned", channel.getId(), staleOwner);
+
+        verify(invites, never()).removeInviteInfo(replacement);
     }
 
     private static PlayServiceImpl service(IInviteStreamService invites, ISIPCommander commander,

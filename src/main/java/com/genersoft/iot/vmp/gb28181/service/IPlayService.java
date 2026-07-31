@@ -64,6 +64,11 @@ public interface IPlayService {
 
     void stopTalk(Device device, DeviceChannel channel, Boolean streamIsReady);
 
+    /**
+     * Stops and releases all locally owned TALK resources for an offline device.
+     */
+    void stopTalkForDevice(Device device);
+
     void getSnap(String deviceId, String channelId, String fileName, ErrorCallback errorCallback);
 
     void getSnap(CommonGBChannel channel, ErrorCallback<byte[]> errorCallback);

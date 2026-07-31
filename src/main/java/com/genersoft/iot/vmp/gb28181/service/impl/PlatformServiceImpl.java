@@ -698,8 +698,13 @@ public class PlatformServiceImpl implements IPlatformService {
                     // ssrc检验
                     // 更新ssrc
                     log.info("[Invite 200OK] SSRC修正 {}->{}", ssrcInfo.getSsrc(), ssrcInResponse);
-                    String zlmStream = ssrcInfo.getZlmStream() == null ? ssrcInfo.getStream() : ssrcInfo.getZlmStream();
-                    Boolean result = mediaServerService.updateRtpServerSSRC(mediaServerItem, ssrcInfo.getApp(), zlmStream, ssrcInResponse);
+                    String zlmStream = ssrcInfo.getZlmStream();
+                    // SSRC correction targets the ZLM listener, never the
+                    // published/business stream. Legacy records without the
+                    // listener id must fail closed instead of guessing.
+                    Boolean result = zlmStream != null && !zlmStream.isEmpty()
+                            && mediaServerService.updateRtpServerSSRC(
+                            mediaServerItem, ssrcInfo.getApp(), zlmStream, ssrcInResponse);
                     if (!result) {
                         try {
                             log.warn("[Invite 200OK] 更新ssrc失败，停止喊话 {}/{}", platform.getServerGBId(), channel.getGbDeviceId());
@@ -821,8 +826,16 @@ public class PlatformServiceImpl implements IPlatformService {
         } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
             log.warn("[消息发送失败] 停止语音对讲， 平台：{}，通道：{}", platform.getId(), channel.getGbDeviceId() );
         } finally {
-            receiveRtpServerService.closeRTPServer(mediaServerItem, app, stream);
             InviteInfo inviteInfo = inviteStreamService.getInviteInfo(null, channel.getGbId(), stream);
+            boolean listenerClosed = false;
+            if (inviteInfo != null && inviteInfo.getSsrcInfo() != null) {
+                listenerClosed = receiveRtpServerService.closeRtpResource(inviteInfo.getSsrcInfo());
+            }
+            if (!listenerClosed) {
+                // A legacy platform transaction may not retain the listener
+                // owner. Clean only the published stream in that case.
+                receiveRtpServerService.closeRTPServerByBusinessStreamIfUnowned(mediaServerItem, app, stream);
+            }
             if (inviteInfo != null) {
                 inviteStreamService.removeInviteInfo(inviteInfo);
             }

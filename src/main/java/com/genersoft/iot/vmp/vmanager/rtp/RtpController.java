@@ -194,12 +194,22 @@ public class RtpController {
     @GetMapping(value = "/receive/close")
     @ResponseBody
     @Operation(summary = "关闭收流", security = @SecurityRequirement(name = JwtUtils.HEADER))
-    @Parameter(name = "stream", description = "流的ID", required = true)
-    public void closeRtpServer(String stream) {
-        log.info("[第三方服务对接->关闭收流] stream->{}", stream);
+    @Parameter(name = "stream", description = "业务流ID", required = true)
+    @Parameter(name = "ssrc", description = "多端口RTP的十进制SSRC，可选", required = false)
+    public void closeRtpServer(String stream,
+                               @RequestParam(value = "ssrc", required = false) String ssrc) {
+        log.info("[第三方服务对接->关闭收流] stream->{}, ssrc->{}", stream, ssrc);
         MediaServer mediaServerItem = mediaServerService.getDefaultMediaServer();
-        receiveRtpServerService.closeRTPServer(mediaServerItem, MediaStreamUtil.RTP_APP, stream);
-        receiveRtpServerService.closeRTPServer(mediaServerItem, MediaStreamUtil.RTP_APP, stream+ "_a");
+        if (mediaServerItem != null) {
+            if (ssrc == null || ssrc.isEmpty()) {
+                receiveRtpServerService.closeRTPServerByBusinessStream(mediaServerItem, MediaStreamUtil.RTP_APP, stream);
+                receiveRtpServerService.closeRTPServerByBusinessStream(mediaServerItem, MediaStreamUtil.RTP_APP, stream + "_a");
+            } else {
+                receiveRtpServerService.closeRTPServerBySsrcId(mediaServerItem.getId(), MediaStreamUtil.RTP_APP, ssrc);
+                receiveRtpServerService.closeRTPServerByBusinessStreamIfUnowned(mediaServerItem, MediaStreamUtil.RTP_APP, stream);
+                receiveRtpServerService.closeRTPServerByBusinessStreamIfUnowned(mediaServerItem, MediaStreamUtil.RTP_APP, stream + "_a");
+            }
+        }
         String receiveKey = VideoManagerConstants.WVP_OTHER_RECEIVE_RTP_INFO + userSetting.getServerId() + "_*_"  + stream;
         List<Object> scan = RedisUtil.scan(redisTemplate, receiveKey);
         if (scan.size() > 0) {

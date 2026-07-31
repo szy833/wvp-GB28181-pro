@@ -253,10 +253,15 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 								deviceChannelService.stopPlay(channel.getId());
 								inviteStreamService.removeInviteInfo(inviteInfo);
 								if (inviteInfo.getSsrcInfo() != null) {
-									receiveRtpServerService.closeRTPServer(inviteInfo.getSsrcInfo());
-									rtpClosed = true;
+									SSRCInfo inviteSsrcInfo = inviteInfo.getSsrcInfo();
+									rtpClosed = receiveRtpServerService.closeRtpResource(inviteSsrcInfo)
+											|| inviteSsrcInfo.getResourceId() != null;
 								} else if (inviteInfo.getStreamInfo() != null) {
-									receiveRtpServerService.closeRTPServer(inviteInfo.getStreamInfo().getMediaServer(), inviteInfo.getStreamInfo().getApp(), inviteInfo.getStreamInfo().getStream());
+									receiveRtpServerService.closeRTPServerByBusinessStream(
+											inviteInfo.getStreamInfo().getMediaServer(),
+											inviteInfo.getStreamInfo().getApp(), inviteInfo.getStreamInfo().getStream());
+									// No SSRC is available here, so the business-only
+									// attempt is the complete safe cleanup target.
 									rtpClosed = true;
 								}
 							} else {
@@ -269,8 +274,7 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 						}
 						break;
 					case BROADCAST:
-					case TALK:
-						// 查找来源的对讲设备，发送停止
+						// 广播使用 AudioBroadcastManager 维护的发送资源。
 						Device sourceDevice = deviceService.getDeviceByChannelId(ssrcTransaction.getChannelId());
 						AudioBroadcastCatch audioBroadcastCatch = audioBroadcastManager.get(channel.getId());
 						if (sourceDevice != null) {
@@ -280,6 +284,17 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 							// 来自上级平台的停止对讲
 							log.info("[停止对讲] 来自上级，平台：{}, 通道：{}", ssrcTransaction.getDeviceId(), channel.getDeviceId());
 							audioBroadcastManager.del(channel.getId());
+						}
+						break;
+					case TALK:
+						// 普通 TALK 不登记 AudioBroadcastCatch，必须走对讲 owner 清理。
+						log.info("[收到BYE] 设备主动结束对讲：deviceId={}, channelId={}",
+								device.getDeviceId(), channel.getId());
+						try {
+							playService.stopTalk(device, channel, null);
+						} catch (RuntimeException e) {
+							log.warn("[收到BYE] 停止对讲资源失败：deviceId={}, channelId={}",
+									device.getDeviceId(), channel.getId(), e);
 						}
 						break;
 				}
@@ -300,8 +315,15 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 					&& ssrcTransaction.getApp() != null
 					&& ssrcTransaction.getStream() != null) {
 				try {
-					receiveRtpServerService.closeRTPServerByMediaServerId(
-							ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getStream());
+					MediaServer mediaServer = mediaServerService.getOne(ssrcTransaction.getMediaServerId());
+					if (mediaServer != null && mediaServer.isRtpEnable() && ssrcTransaction.getSsrc() != null) {
+						receiveRtpServerService.closeRTPServerBySsrcId(
+								ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getSsrc());
+					}
+					// Listener and published stream are separate targets. The
+					// business stream must be released even when listener close hits.
+					receiveRtpServerService.closeRTPServerByBusinessStreamIfUnowned(
+							mediaServer, ssrcTransaction.getApp(), ssrcTransaction.getStream());
 				} catch (Exception e) {
 					log.warn("[BYE处理] 兜底关闭RTP失败: mediaServerId={}, app={}, stream={}",
 							ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getStream(), e);

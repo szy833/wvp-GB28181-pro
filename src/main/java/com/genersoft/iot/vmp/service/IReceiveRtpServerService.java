@@ -44,18 +44,76 @@ public interface IReceiveRtpServerService {
     }
 
     default void closeRTPServer(SSRCInfo info) {
+        closeRtpResource(info);
+    }
+
+    /**
+     * Closes an RTP resource by owner handle and reports whether a resource was
+     * actually claimed. A stale owner must not fall back to an unqualified stream.
+     */
+    default boolean closeRtpResource(SSRCInfo info) {
         if (info != null && info.getResourceId() != null) {
             // Resource IDs are owner handles. Never downgrade a stale owner to
             // the unqualified media-server/app/stream close path.
             closeRTPServer(new RtpServerOpenResult(info.getPort(), info.getResourceId(), info.getStream(), info.getZlmStream()));
+            return false;
         } else if (info != null && info.getMediaServerId() != null && info.getZlmStream() != null) {
-            closeRTPServerByMediaServerId(info.getMediaServerId(), info.getApp(), info.getZlmStream());
+            return closeRTPServerByZlmStreamId(info.getMediaServerId(), info.getApp(), info.getZlmStream());
         }
+        return false;
     }
 
     void closeRTPServer(MediaServer mediaServer, String app, String stream);
 
     void closeRTPServerByMediaServerId(String mediaServerId, String app, String stream);
+
+    /**
+     * Closes the ZLM RTP listener identified by its actual listener stream id.
+     * This is intentionally separate from the published/business stream.
+     */
+    default boolean closeRTPServerByZlmStream(MediaServer mediaServer, String app, String zlmStream) {
+        closeRTPServer(mediaServer, app, zlmStream);
+        return mediaServer != null && zlmStream != null;
+    }
+
+    /**
+     * Closes a published stream by business id without guessing a ZLM listener id.
+     */
+    default boolean closeRTPServerByBusinessStream(MediaServer mediaServer, String app, String businessStream) {
+        closeRTPServer(mediaServer, app, businessStream);
+        return mediaServer != null && businessStream != null;
+    }
+
+    /**
+     * Cleans a legacy published stream only when no tracked RTP owner claims it.
+     * This is for stale records and must not terminate a newer owner.
+     */
+    default boolean closeRTPServerByBusinessStreamIfUnowned(MediaServer mediaServer, String app,
+                                                              String businessStream) {
+        // Implementations must perform an owner check; do not downgrade to
+        // the normal business-stream close when that contract is unavailable.
+        return false;
+    }
+
+    default boolean closeRTPServerByZlmStreamId(String mediaServerId, String app, String zlmStream) {
+        return false;
+    }
+
+    /**
+     * Legacy id-only cleanup. Implementations must treat the stream as
+     * unowned and avoid closing a newer owner that reused the business id.
+     */
+    default boolean closeRTPServerByBusinessStreamId(String mediaServerId, String app, String businessStream) {
+        return false;
+    }
+
+    /**
+     * Reconciles a legacy transaction by deriving and validating its ZLM stream
+     * from the decimal SSRC before attempting a listener close.
+     */
+    default boolean closeRTPServerBySsrcId(String mediaServerId, String app, String ssrc) {
+        return false;
+    }
 
     void addAuthenticateInfoForGb28181Talk(MediaServer mediaServer, String streamId);
 

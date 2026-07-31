@@ -74,7 +74,7 @@ public class InviteInfoCleanupTask {
             for (InviteInfo inviteInfo : activeInvites) {
                 if (inviteInfo == null || inviteInfo.getStatus() != InviteSessionStatus.ok
                         || inviteInfo.getStreamInfo() == null || !isReconciliableType(inviteInfo)
-                        || !hasReliableOwner(inviteInfo)
+                        || !hasRtpIdentity(inviteInfo)
                         || !mediaServer.getId().equals(resolveMediaServerId(inviteInfo))) {
                     continue;
                 }
@@ -83,7 +83,7 @@ public class InviteInfoCleanupTask {
                     log.debug("[Invite孤儿校验] 缺少可靠ZLM流标识，跳过：{}", inviteInfo);
                     continue;
                 }
-                if (rtpStreams.contains(actualStream) || isCompletedDownloadRetained(inviteInfo)) {
+                if (containsRtpStream(rtpStreams, actualStream) || isCompletedDownloadRetained(inviteInfo)) {
                     continue;
                 }
                 try {
@@ -105,9 +105,13 @@ public class InviteInfoCleanupTask {
     }
 
     private String resolveActualRtpStream(InviteInfo inviteInfo) {
-        if (hasReliableOwner(inviteInfo)) {
+        if (inviteInfo.getSsrcInfo() != null && inviteInfo.getSsrcInfo().getZlmStream() != null
+                && !inviteInfo.getSsrcInfo().getZlmStream().isEmpty()) {
             return inviteInfo.getSsrcInfo().getZlmStream();
         }
+        // SSRC alone is not enough to identify a listener safely. Runtime
+        // close paths may validate it against listRtpServer, but this periodic
+        // task must not guess or remove a legacy InviteInfo.
         return null;
     }
 
@@ -117,12 +121,15 @@ public class InviteInfoCleanupTask {
                 || inviteInfo.getType() == InviteSessionType.DOWNLOAD;
     }
 
-    private boolean hasReliableOwner(InviteInfo inviteInfo) {
-        return inviteInfo.getSsrcInfo() != null
-                && inviteInfo.getSsrcInfo().getResourceId() != null
-                && !inviteInfo.getSsrcInfo().getResourceId().isEmpty()
-                && inviteInfo.getSsrcInfo().getZlmStream() != null
-                && !inviteInfo.getSsrcInfo().getZlmStream().isEmpty();
+    private boolean hasRtpIdentity(InviteInfo inviteInfo) {
+        return inviteInfo.getSsrcInfo() != null && resolveActualRtpStream(inviteInfo) != null;
+    }
+
+    private boolean containsRtpStream(List<String> streams, String expected) {
+        if (expected == null || streams == null) {
+            return false;
+        }
+        return streams.stream().anyMatch(item -> expected.equalsIgnoreCase(item));
     }
 
     private boolean isCompletedDownloadRetained(InviteInfo inviteInfo) {

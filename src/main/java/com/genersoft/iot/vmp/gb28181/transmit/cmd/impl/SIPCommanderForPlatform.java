@@ -642,7 +642,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
         String mediaServerId = sendRtpItem.getMediaServerId();
         MediaServer mediaServerItem = mediaServerService.getOne(mediaServerId);
         if (mediaServerItem != null) {
-            receiveRtpServerService.closeRTPServer(mediaServerItem, sendRtpItem.getApp(), sendRtpItem.getStream());
+            receiveRtpServerService.closeRTPServerByBusinessStream(mediaServerItem, sendRtpItem.getApp(), sendRtpItem.getStream());
         }
         SIPRequest byeRequest = headerProviderPlatformProvider.createByeRequest(platform, sendRtpItem, channel);
         if (byeRequest == null) {

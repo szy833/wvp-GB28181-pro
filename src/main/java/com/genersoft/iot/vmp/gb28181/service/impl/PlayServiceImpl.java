@@ -15,6 +15,7 @@ import com.genersoft.iot.vmp.gb28181.session.AudioBroadcastManager;
 import com.genersoft.iot.vmp.gb28181.session.SSRCFactory;
 import com.genersoft.iot.vmp.gb28181.session.SendSsrcFactory;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
+import com.genersoft.iot.vmp.gb28181.session.SsrcLease;
 import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommander;
 import com.genersoft.iot.vmp.gb28181.transmit.cmd.ISIPCommanderForPlatform;
 import com.genersoft.iot.vmp.gb28181.utils.SipUtils;
@@ -60,8 +61,10 @@ import java.math.RoundingMode;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.Vector;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @SuppressWarnings(value = {"rawtypes", "unchecked"})
@@ -70,6 +73,29 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class PlayServiceImpl implements IPlayService {
 
     private static final long DOWNLOAD_CLEANUP_RETENTION_MILLIS = 15 * 60 * 1000L;
+
+    private static final class TalkSsrcOwner {
+        private final String deviceId;
+        private final SsrcLease lease;
+        private final String stream;
+        private final String callId;
+        private final String sendSsrc;
+        private volatile String timeoutTaskKey;
+
+        private TalkSsrcOwner(String deviceId, SsrcLease lease, String stream, String callId) {
+            this(deviceId, lease, stream, callId, null);
+        }
+
+        private TalkSsrcOwner(String deviceId, SsrcLease lease, String stream, String callId, String sendSsrc) {
+            this.deviceId = deviceId;
+            this.lease = lease;
+            this.stream = stream;
+            this.callId = callId;
+            this.sendSsrc = sendSsrc;
+        }
+    }
+
+    private final ConcurrentHashMap<Integer, TalkSsrcOwner> talkSsrcLeases = new ConcurrentHashMap<>();
 
     private ErrorCallback<StreamInfo> registerInviteCallback(InviteSessionType type, Integer channelId,
                                                                ErrorCallback<StreamInfo> callback) {
@@ -386,7 +412,7 @@ public class PlayServiceImpl implements IPlayService {
                     // 点播发起了但是尚未成功, 仅注册回调等待结果即可
                     registerInviteCallback(InviteSessionType.PLAY, channel.getId(), callback);
                     deviceChannelService.stopPlay(channel.getId());
-                    inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
+                    inviteStreamService.removeInviteInfo(inviteInfoInCatch);
                 }
             }
         }
@@ -399,13 +425,19 @@ public class PlayServiceImpl implements IPlayService {
                 (code, msg, result) -> {
 
             if (code == InviteErrorCode.SUCCESS.getCode() && result != null && result.getHookData() != null) {
+                SSRCInfo callbackSsrcInfo = result.getSsrcInfo();
+                if (!isPlayInviteOwner(channel.getId(), callbackSsrcInfo)) {
+                    log.debug("[点播] 忽略过期RTP成功回调，保留当前点播：channelId={}, resourceId={}",
+                            channel.getId(), callbackSsrcInfo == null ? null : callbackSsrcInfo.getResourceId());
+                    return;
+                }
                 // hook 响应
                 StreamInfo streamInfo = onPublishHandlerForPlay(result.getHookData().getMediaServer(), result.getHookData().getMediaInfo(), device, channel);
                 if (streamInfo == null){
                     inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null,
                             InviteErrorCode.ERROR_FOR_STREAM_PARSING_EXCEPTIONS.getCode(),
                             InviteErrorCode.ERROR_FOR_STREAM_PARSING_EXCEPTIONS.getMsg(), null);
-                    inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
+                    removePlayInviteInfoIfOwned(channel.getId(), result == null ? null : result.getSsrcInfo());
                     return;
                 }
                 inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null,
@@ -417,16 +449,22 @@ public class PlayServiceImpl implements IPlayService {
                         channel.getStreamIdentification());
                 snapOnPlay(result.getHookData().getMediaServer(), device.getDeviceId(), channel.getDeviceId(), streamId);
             }else {
+                SSRCInfo callbackSsrcInfo = result == null ? null : result.getSsrcInfo();
+                if (!isPlayInviteOwner(channel.getId(), callbackSsrcInfo)) {
+                    log.debug("[点播] 忽略过期RTP回调，保留当前点播：channelId={}, resourceId={}",
+                            channel.getId(), callbackSsrcInfo == null ? null : callbackSsrcInfo.getResourceId());
+                    return;
+                }
                 inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null, code, msg, null);
-                inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
-                SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(MediaStreamUtil.RTP_APP, streamId);
+                removePlayInviteInfoIfOwned(channel.getId(), callbackSsrcInfo);
+                SsrcTransaction ssrcTransaction = getPlaySessionIfOwned(callbackSsrcInfo);
                 if (ssrcTransaction != null) {
                     try {
                         cmder.streamByeCmd(device, channel.getDeviceId(), MediaStreamUtil.RTP_APP, streamId, null, null);
                     } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                         log.error("[点播超时]， 发送BYE失败 {}", e.getMessage());
                     } finally {
-                        sessionManager.removeByStream(MediaStreamUtil.RTP_APP, streamId);
+                        sessionManager.removeByStreamIfSsrc(MediaStreamUtil.RTP_APP, streamId, callbackSsrcInfo.getSsrc());
                     }
                 }
             }
@@ -454,50 +492,103 @@ public class PlayServiceImpl implements IPlayService {
                 // 处理收到200ok后的TCP主动连接以及SSRC不一致的问题
                 InviteOKHandler(eventResult, ssrcInfo, mediaServer, device, channel, callbackOnce, inviteInfo, InviteSessionType.PLAY);
             }, (event) -> {
-                log.info("[点播失败]{}:{} deviceId: {}, channelId:{}",event.statusCode, event.msg, device.getDeviceId(), channel.getDeviceId());
                 receiveRtpServerService.closeRTPServer(ssrcInfo);
+                if (!isPlayInviteOwner(channel.getId(), ssrcInfo)) {
+                    log.debug("[点播] 忽略过期SIP失败回调，保留当前点播：channelId={}, resourceId={}, code={}, msg={}",
+                            channel.getId(), ssrcInfo.getResourceId(), event.statusCode, event.msg);
+                    return;
+                }
+                log.info("[点播失败]{}:{} deviceId: {}, channelId:{}", event.statusCode, event.msg,
+                        device.getDeviceId(), channel.getDeviceId());
 
-                sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
+                if (getPlaySessionIfOwned(ssrcInfo) != null) {
+                    sessionManager.removeByStreamIfSsrc(ssrcInfo.getApp(), ssrcInfo.getStream(), ssrcInfo.getSsrc());
+                }
                 inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null,
                         event.statusCode, event.msg, null);
 
-                inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
+                removePlayInviteInfoIfOwned(channel.getId(), ssrcInfo);
             }, userSetting.getPlayTimeout().longValue());
         } catch (InvalidArgumentException | SipException | ParseException e) {
             log.error("[命令发送失败] 点播消息: {}", e.getMessage());
             receiveRtpServerService.closeRTPServer(ssrcInfo);
-            sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
-            inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null,
-                    InviteErrorCode.ERROR_FOR_SIP_SENDING_FAILED.getCode(),
-                    InviteErrorCode.ERROR_FOR_SIP_SENDING_FAILED.getMsg(), null);
-
-            inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
+            if (isPlayInviteOwner(channel.getId(), ssrcInfo)) {
+                if (getPlaySessionIfOwned(ssrcInfo) != null) {
+                    sessionManager.removeByStreamIfSsrc(ssrcInfo.getApp(), ssrcInfo.getStream(), ssrcInfo.getSsrc());
+                }
+                inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null,
+                        InviteErrorCode.ERROR_FOR_SIP_SENDING_FAILED.getCode(),
+                        InviteErrorCode.ERROR_FOR_SIP_SENDING_FAILED.getMsg(), null);
+                removePlayInviteInfoIfOwned(channel.getId(), ssrcInfo);
+            }
         }
         return ssrcInfo;
+    }
+
+
+    private boolean isPlayInviteOwner(Integer channelId, SSRCInfo owner) {
+        if (channelId == null || owner == null || owner.getResourceId() == null) {
+            return false;
+        }
+        InviteInfo current = inviteStreamService.getInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channelId);
+        return current != null && current.getSsrcInfo() != null
+                && Objects.equals(current.getSsrcInfo().getResourceId(), owner.getResourceId());
+    }
+
+    private SsrcTransaction getPlaySessionIfOwned(SSRCInfo owner) {
+        if (owner == null || owner.getApp() == null || owner.getStream() == null || owner.getSsrc() == null) {
+            return null;
+        }
+        SsrcTransaction transaction = sessionManager.getSsrcTransactionByStream(owner.getApp(), owner.getStream());
+        if (transaction == null || !Objects.equals(transaction.getSsrc(), owner.getSsrc())) {
+            return null;
+        }
+        return transaction;
+    }
+
+    /** Removes a failed play record only when it still owns the current RTP resource. */
+    private void removePlayInviteInfoIfOwned(Integer channelId, SSRCInfo owner) {
+        if (channelId == null || owner == null || owner.getResourceId() == null) {
+            return;
+        }
+        InviteInfo current = inviteStreamService.getInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channelId);
+        if (current == null || current.getSsrcInfo() == null
+                || !Objects.equals(current.getSsrcInfo().getResourceId(), owner.getResourceId())) {
+            return;
+        }
+        inviteStreamService.removeInviteInfo(current);
     }
 
 
     private void talk(MediaServer mediaServerItem, Device device, DeviceChannel channel, String stream,
                       SipSubscribe.Event errorEvent, Runnable timeoutCallback, AudioBroadcastEvent audioEvent) {
 
-        String ySsrc = ssrcFactory.getPlaySsrc(mediaServerItem);
+        SsrcLease lease = ssrcFactory.allocatePlayLease(mediaServerItem);
+        String ySsrc = lease == null ? null : lease.getSsrc();
 
         if (ySsrc == null) {
             audioEvent.call("ssrc已经用尽");
             return;
         }
-        String sendSsrc = sendSsrcFactory.getSendSsrc("0");
+        String sendSsrc;
         SendRtpInfo sendRtpInfo;
         try {
+            sendSsrc = sendSsrcFactory.getSendSsrc("0");
             sendRtpInfo = sendRtpServerService.createSendRtpInfo(mediaServerItem, null, null, sendSsrc, device.getDeviceId(), MediaStreamUtil.GB28181_TALK, stream,
                     channel.getId(), true, false);
             if (sendRtpInfo == null) {
+                releaseTalkLeaseDirect(lease, channel.getId());
                 audioEvent.call("获取发流端口失败");
                 return;
             }
             sendRtpInfo.setPlayType(InviteStreamType.TALK);
         }catch (PlayException e) {
+            releaseTalkLeaseDirect(lease, channel.getId());
             log.info("[语音对讲]开始 获取发流端口失败 deviceId: {}, channelId: {},", device.getDeviceId(), channel.getDeviceId());
+            return;
+        } catch (RuntimeException e) {
+            releaseTalkLeaseDirect(lease, channel.getId());
+            log.warn("[语音对讲]开始 获取发流端口异常 deviceId: {}, channelId: {}", device.getDeviceId(), channel.getDeviceId(), e);
             return;
         }
 
@@ -509,10 +600,27 @@ public class PlayServiceImpl implements IPlayService {
         sendRtpInfo.setReceiveStream(stream + "_talk");
 
         String callId = SipUtils.getNewCallId();
+        TalkSsrcOwner leaseOwner = new TalkSsrcOwner(device.getDeviceId(), lease, sendRtpInfo.getStream(), callId,
+                sendRtpInfo.getSsrc());
+        if (talkSsrcLeases.putIfAbsent(channel.getId(), leaseOwner) != null) {
+            // The duplicate request has not started ZLM yet, but discard the temporary
+            // record so a future port-registry implementation cannot retain it.
+            try {
+                sendRtpServerService.delete(sendRtpInfo);
+            } catch (RuntimeException e) {
+                log.warn("[语音对讲] 清理重复请求的发流信息失败：deviceId={}, channelId={}",
+                        device.getDeviceId(), channel.getDeviceId(), e);
+            }
+            releaseTalkLeaseDirect(lease, channel.getId());
+            audioEvent.call("语音对讲进行中");
+            return;
+        }
         log.info("[语音对讲]开始 deviceId: {}, channelId: {},收流端口： {}, 收流模式：{}, SSRC: {}, SSRC校验：{}", device.getDeviceId(), channel.getDeviceId(), sendRtpInfo.getLocalPort(), device.getStreamMode(), sendRtpInfo.getSsrc(), false);
         // 超时处理
         String timeOutTaskKey = UUID.randomUUID().toString();
-        dynamicTask.startDelay(timeOutTaskKey, () -> {
+        leaseOwner.timeoutTaskKey = timeOutTaskKey;
+        try {
+            dynamicTask.startDelay(timeOutTaskKey, () -> {
 
             log.info("[语音对讲] 收流超时 deviceId: {}, channelId: {}，端口：{}, SSRC: {}", device.getDeviceId(), channel.getDeviceId(), sendRtpInfo.getPort(), sendRtpInfo.getSsrc());
             // 点播超时回复BYE 同时释放ssrc以及此次点播的资源
@@ -521,14 +629,22 @@ public class PlayServiceImpl implements IPlayService {
             } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                 log.error("[语音对讲]超时， 发送BYE失败 {}", e.getMessage());
             } finally {
+                stopTalk(device, channel, null, leaseOwner);
                 timeoutCallback.run();
                 sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
             }
-        }, userSetting.getPlayTimeout());
+            }, userSetting.getPlayTimeout());
+        } catch (RuntimeException e) {
+            log.warn("[语音对讲]注册超时任务失败 deviceId: {}, channelId: {}", device.getDeviceId(), channel.getDeviceId(), e);
+            stopTalk(device, channel, null, leaseOwner);
+            audioEvent.call("失败，超时任务注册失败");
+            return;
+        }
 
         try {
             Integer localPort = mediaServerService.startSendRtpPassive(mediaServerItem, sendRtpInfo, userSetting.getPlayTimeout() * 1000);
             if (localPort == null || localPort <= 0) {
+                stopTalk(device, channel, null, leaseOwner);
                 timeoutCallback.run();
                 sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
                 return;
@@ -541,7 +657,12 @@ public class PlayServiceImpl implements IPlayService {
             log.info("[语音对讲]失败 deviceId: {}, channelId: {}", device.getDeviceId(), channel.getDeviceId());
             audioEvent.call("失败, " + e.getMessage());
             // 查看是否已经建立了通道，存在则发送bye
-            stopTalk(device, channel);
+            stopTalk(device, channel, null, leaseOwner);
+            return;
+        } catch (RuntimeException e) {
+            log.warn("[语音对讲]失败 deviceId: {}, channelId: {}", device.getDeviceId(), channel.getDeviceId(), e);
+            stopTalk(device, channel, null, leaseOwner);
+            return;
         }
 
 
@@ -549,56 +670,73 @@ public class PlayServiceImpl implements IPlayService {
         try {
             cmder.talkStreamCmd(mediaServerItem, sendRtpInfo, ySsrc, device, channel, callId, (hookData) -> {
                 log.info("[语音对讲] 流已生成， 开始推流： " + hookData);
-                dynamicTask.stop(timeOutTaskKey);
+                stopTalkTimeoutTask(timeOutTaskKey);
                 // TODO 暂不做处理
             }, (hookData) -> {
                 log.info("[语音对讲] 设备开始推流： " + hookData);
-                dynamicTask.stop(timeOutTaskKey);
+                stopTalkTimeoutTask(timeOutTaskKey);
 
             }, (event) -> {
-                dynamicTask.stop(timeOutTaskKey);
-
-                if (event.event instanceof ResponseEvent) {
-                    ResponseEvent responseEvent = (ResponseEvent) event.event;
-                    if (responseEvent.getResponse() instanceof SIPResponse) {
-                        SIPResponse response = (SIPResponse) responseEvent.getResponse();
-                        sendRtpInfo.setFromTag(response.getFromTag());
-                        sendRtpInfo.setToTag(response.getToTag());
-                        sendRtpInfo.setCallId(response.getCallIdHeader().getCallId());
-                        sendRtpServerService.update(sendRtpInfo);
-
-                        SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), sendRtpInfo.getChannelId(), response.getCallIdHeader().getCallId(), sendRtpInfo.getApp(),
-                                sendRtpInfo.getStream(), sendRtpInfo.getSsrc(), sendRtpInfo.getMediaServerId(),
-                                response, InviteSessionType.TALK);
-
-                        sessionManager.put(ssrcTransaction);
-                    } else {
-                        log.error("[语音对讲]收到的消息错误，response不是SIPResponse");
+                stopTalkTimeoutTask(timeOutTaskKey);
+                try {
+                    if (!handleTalkInviteResponse(device, sendRtpInfo, event)) {
+                        stopTalk(device, channel, null, leaseOwner);
+                        sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
                     }
-                } else {
-                    log.error("[语音对讲]收到的消息错误，event不是ResponseEvent");
+                } catch (RuntimeException e) {
+                    log.warn("[语音对讲]处理SIP响应失败 deviceId: {}, channelId: {}", device.getDeviceId(), channel.getDeviceId(), e);
+                    stopTalk(device, channel, null, leaseOwner);
+                    sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
                 }
 
             }, (event) -> {
-                dynamicTask.stop(timeOutTaskKey);
-                receiveRtpServerService.closeRTPServer(mediaServerItem, sendRtpInfo.getApp(), sendRtpInfo.getStream());
+                stopTalkTimeoutTask(timeOutTaskKey);
+                stopTalk(device, channel, null, leaseOwner);
                 sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
                 errorEvent.response(event);
             }, userSetting.getPlayTimeout().longValue());
         } catch (InvalidArgumentException | SipException | ParseException e) {
 
             log.error("[命令发送失败] 对讲消息: {}", e.getMessage());
-            dynamicTask.stop(timeOutTaskKey);
-            receiveRtpServerService.closeRTPServer(mediaServerItem, sendRtpInfo.getApp(), sendRtpInfo.getStream());
+            stopTalkTimeoutTask(timeOutTaskKey);
+            stopTalk(device, channel, null, leaseOwner);
             sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
             SipSubscribe.EventResult eventResult = new SipSubscribe.EventResult();
             eventResult.type = SipSubscribe.EventResultType.cmdSendFailEvent;
             eventResult.statusCode = -1;
             eventResult.msg = "命令发送失败";
             errorEvent.response(eventResult);
+        } catch (RuntimeException e) {
+            log.warn("[命令发送失败] 对讲消息异常", e);
+            stopTalkTimeoutTask(timeOutTaskKey);
+            stopTalk(device, channel, null, leaseOwner);
+            sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
         }
 //        }
 
+    }
+
+    private boolean handleTalkInviteResponse(Device device, SendRtpInfo sendRtpInfo, SipSubscribe.EventResult event) {
+        if (!(event.event instanceof ResponseEvent)) {
+            log.error("[语音对讲]收到的消息错误，event不是ResponseEvent");
+            return false;
+        }
+        ResponseEvent responseEvent = (ResponseEvent) event.event;
+        if (!(responseEvent.getResponse() instanceof SIPResponse)) {
+            log.error("[语音对讲]收到的消息错误，response不是SIPResponse");
+            return false;
+        }
+        SIPResponse response = (SIPResponse) responseEvent.getResponse();
+        sendRtpInfo.setFromTag(response.getFromTag());
+        sendRtpInfo.setToTag(response.getToTag());
+        sendRtpInfo.setCallId(response.getCallIdHeader().getCallId());
+        sendRtpServerService.update(sendRtpInfo);
+
+        SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), sendRtpInfo.getChannelId(), response.getCallIdHeader().getCallId(), sendRtpInfo.getApp(),
+                sendRtpInfo.getStream(), sendRtpInfo.getSsrc(), sendRtpInfo.getMediaServerId(),
+                response, InviteSessionType.TALK);
+        sessionManager.put(ssrcTransaction);
+        return true;
     }
 
     private void tcpActiveHandler(Device device, DeviceChannel channel, String contentString,
@@ -864,8 +1002,13 @@ public class PlayServiceImpl implements IPlayService {
                     // ssrc检验
                     // 更新ssrc
                     log.info("[Invite 200OK] SSRC修正 {}->{}", ssrcInfo.getSsrc(), ssrcInResponse);
-                    String zlmStream = ssrcInfo.getZlmStream() == null ? ssrcInfo.getStream() : ssrcInfo.getZlmStream();
-                    Boolean result = mediaServerService.updateRtpServerSSRC(mediaServerItem, ssrcInfo.getApp(), zlmStream, ssrcInResponse);
+                    String zlmStream = ssrcInfo.getZlmStream();
+                    // SSRC correction targets the ZLM listener, never the
+                    // published/business stream. Legacy records without the
+                    // listener id must fail closed instead of guessing.
+                    Boolean result = zlmStream != null && !zlmStream.isEmpty()
+                            && mediaServerService.updateRtpServerSSRC(
+                            mediaServerItem, ssrcInfo.getApp(), zlmStream, ssrcInResponse);
                     if (!result) {
                         try {
                             log.warn("[Invite 200OK] 更新ssrc失败，停止点播 {}/{}", device.getDeviceId(), channel.getDeviceId());
@@ -1364,7 +1507,7 @@ public class PlayServiceImpl implements IPlayService {
             if (inviteInfo.getStatus() != InviteSessionStatus.ok || inviteInfo.getStreamInfo() == null) {
                 continue;
             }
-            if (!isReconciliableType(inviteInfo) || !hasReliableOwner(inviteInfo)) {
+            if (!isReconciliableType(inviteInfo) || !hasRtpIdentity(inviteInfo)) {
                 continue;
             }
             if (!mediaServer.getId().equals(resolveMediaServerId(inviteInfo))) {
@@ -1374,7 +1517,7 @@ public class PlayServiceImpl implements IPlayService {
                 continue;
             }
             String streamKey = resolveActualRtpStream(inviteInfo);
-            if (streamKey != null && !rtpServerList.contains(streamKey)) {
+            if (streamKey != null && rtpServerList.stream().noneMatch(item -> streamKey.equalsIgnoreCase(item))) {
                 stopIfOwner(inviteInfo);
             }
         }
@@ -1390,9 +1533,12 @@ public class PlayServiceImpl implements IPlayService {
     }
 
     private String resolveActualRtpStream(InviteInfo inviteInfo) {
-        if (hasReliableOwner(inviteInfo)) {
+        if (inviteInfo.getSsrcInfo() != null && inviteInfo.getSsrcInfo().getZlmStream() != null
+                && !inviteInfo.getSsrcInfo().getZlmStream().isEmpty()) {
             return inviteInfo.getSsrcInfo().getZlmStream();
         }
+        // SSRC-only legacy records are reconciled by explicit close paths
+        // after listRtpServer validation, never by this broad online sweep.
         return null;
     }
 
@@ -1402,12 +1548,8 @@ public class PlayServiceImpl implements IPlayService {
                 || inviteInfo.getType() == InviteSessionType.DOWNLOAD;
     }
 
-    private boolean hasReliableOwner(InviteInfo inviteInfo) {
-        return inviteInfo.getSsrcInfo() != null
-                && inviteInfo.getSsrcInfo().getResourceId() != null
-                && !inviteInfo.getSsrcInfo().getResourceId().isEmpty()
-                && inviteInfo.getSsrcInfo().getZlmStream() != null
-                && !inviteInfo.getSsrcInfo().getZlmStream().isEmpty();
+    private boolean hasRtpIdentity(InviteInfo inviteInfo) {
+        return inviteInfo.getSsrcInfo() != null && resolveActualRtpStream(inviteInfo) != null;
     }
 
     private boolean isCompletedDownloadRetained(InviteInfo inviteInfo) {
@@ -1613,47 +1755,193 @@ public class PlayServiceImpl implements IPlayService {
         }, () -> {
             log.warn("[语音对讲] 失败，{}/{} 超时", device.getDeviceId(), channel.getDeviceId());
             event.call("失败，超时 ");
-            stopTalk(device, channel);
         }, errorMsg -> {
             log.warn("[语音对讲] 失败，{}/{} {}", device.getDeviceId(), channel.getDeviceId(), errorMsg);
             event.call(errorMsg);
-            stopTalk(device, channel);
         });
     }
 
     private void stopTalk(Device device, DeviceChannel channel) {
-        stopTalk(device, channel, null);
+        stopTalk(device, channel, null, null);
     }
 
     @Override
     public void stopTalk(Device device, DeviceChannel channel, Boolean streamIsReady) {
+        stopTalk(device, channel, streamIsReady, null);
+    }
+
+    @Override
+    public void stopTalkForDevice(Device device) {
+        if (device == null || device.getDeviceId() == null) {
+            return;
+        }
+        for (java.util.Map.Entry<Integer, TalkSsrcOwner> entry : talkSsrcLeases.entrySet()) {
+            Integer channelId = entry.getKey();
+            TalkSsrcOwner owner = entry.getValue();
+            if (!device.getDeviceId().equals(owner.deviceId)
+                    || !talkSsrcLeases.remove(channelId, owner)) {
+                continue;
+            }
+            stopTalkTimeoutTask(owner.timeoutTaskKey);
+            try {
+                SendRtpInfo sendRtpInfo = sendRtpServerService.queryByChannelId(channelId, device.getDeviceId());
+                if (sendRtpInfo != null) {
+                    if (talkSsrcLeases.get(channelId) != null || !matchesTalkOwner(owner, sendRtpInfo)) {
+                        log.warn("[设备离线] 发现新的对讲owner，跳过旧发送资源清理：deviceId={}, channelId={}",
+                                device.getDeviceId(), channelId);
+                        continue;
+                    }
+                    try {
+                        MediaServer mediaServer = mediaServerService.getOne(sendRtpInfo.getMediaServerId());
+                        mediaServerService.stopSendRtp(mediaServer, sendRtpInfo.getApp(),
+                                sendRtpInfo.getStream(), sendRtpInfo.getSsrc());
+                    } catch (RuntimeException e) {
+                        log.warn("[设备离线] 停止对讲发送资源失败：deviceId={}, channelId={}",
+                                device.getDeviceId(), channelId, e);
+                    }
+                    sendRtpServerService.deleteByChannel(channelId, device.getDeviceId());
+                }
+                if (owner.callId != null) {
+                    sessionManager.removeByCallId(owner.callId);
+                }
+            } catch (RuntimeException e) {
+                // Redis/send-info failures must not prevent the local lease release.
+                log.warn("[设备离线] 查询对讲发送资源失败，仍释放 lease：deviceId={}, channelId={}",
+                        device.getDeviceId(), channelId, e);
+            } finally {
+                releaseTalkLeaseDirect(owner.lease, channelId);
+            }
+        }
+    }
+
+    private void stopTalk(Device device, DeviceChannel channel, Boolean streamIsReady, TalkSsrcOwner expectedOwner) {
         log.info("[语音对讲] 停止， {}/{}", device.getDeviceId(), channel.getDeviceId());
+        if (expectedOwner != null && talkSsrcLeases.get(channel.getId()) != expectedOwner) {
+            // A timeout/error callback from an older talk must not touch a replacement owner.
+            log.info("[语音对讲] 跳过过期停止回调：channelId={}, callId={}", channel.getId(), expectedOwner.callId);
+            return;
+        }
         SendRtpInfo sendRtpInfo = sendRtpServerService.queryByChannelId(channel.getId(), device.getDeviceId());
         if (sendRtpInfo == null) {
+            if (expectedOwner != null) {
+                releaseTalkLease(channel.getId(), expectedOwner);
+            } else {
+                // Without the send identity there is no proof that this callback owns the
+                // current lease; fail closed instead of releasing a replacement talk.
+                log.warn("[语音对讲] 未找到发送信息，保留当前 lease：channelId={}", channel.getId());
+            }
             log.info("[语音对讲] 停止失败， 未找到发送信息，可能已经停止");
+            return;
+        }
+        if (expectedOwner != null && !matchesTalkOwner(expectedOwner, sendRtpInfo)) {
+            log.warn("[语音对讲] 发送信息不属于当前owner，跳过清理：channelId={}, callId={}",
+                    channel.getId(), expectedOwner.callId);
+            return;
+        }
+        TalkSsrcOwner currentOwner = talkSsrcLeases.get(channel.getId());
+        if (expectedOwner == null && currentOwner != null && !matchesTalkOwner(currentOwner, sendRtpInfo)) {
+            log.warn("[语音对讲] 发送信息不属于当前owner，跳过清理：channelId={}", channel.getId());
             return;
         }
         // 停止向设备推流
         String mediaServerId = sendRtpInfo.getMediaServerId();
         if (mediaServerId == null) {
+            if (expectedOwner != null) {
+                releaseTalkLease(channel.getId(), expectedOwner);
+            } else {
+                releaseTalkLeaseForCurrent(channel.getId(), sendRtpInfo);
+            }
             return;
         }
 
-        MediaServer mediaServer = mediaServerService.getOne(mediaServerId);
+        try {
+            MediaServer mediaServer = mediaServerService.getOne(mediaServerId);
 
-        if (streamIsReady == null || streamIsReady) {
-            mediaServerService.stopSendRtp(mediaServer, sendRtpInfo.getApp(), sendRtpInfo.getStream(), sendRtpInfo.getSsrc());
-        }
+            if (streamIsReady == null || streamIsReady) {
+                mediaServerService.stopSendRtp(mediaServer, sendRtpInfo.getApp(), sendRtpInfo.getStream(), sendRtpInfo.getSsrc());
+            }
 
-        SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
-        if (ssrcTransaction != null) {
-            try {
-                cmder.streamByeCmd(device, channel.getDeviceId(), sendRtpInfo.getApp(), sendRtpInfo.getStream(), null, null);
-            } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException  e) {
-                log.info("[语音对讲] 停止消息发送失败，可能已经停止");
+            SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
+            if (ssrcTransaction != null) {
+                try {
+                    cmder.streamByeCmd(device, channel.getDeviceId(), sendRtpInfo.getApp(), sendRtpInfo.getStream(), null, null);
+                } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException  e) {
+                    log.info("[语音对讲] 停止消息发送失败，可能已经停止");
+                }
+            }
+            sendRtpServerService.deleteByChannel(channel.getId(), device.getDeviceId());
+        } catch (RuntimeException e) {
+            log.warn("[语音对讲] 停止媒体资源失败，继续释放SSRC：channelId={}", channel.getId(), e);
+        } finally {
+            if (expectedOwner != null) {
+                releaseTalkLease(channel.getId(), expectedOwner);
+            } else {
+                releaseTalkLeaseForCurrent(channel.getId(), sendRtpInfo);
             }
         }
-        sendRtpServerService.deleteByChannel(channel.getId(), device.getDeviceId());
+    }
+
+    private void releaseTalkLeaseDirect(SsrcLease lease, Integer channelId) {
+        if (lease == null) {
+            return;
+        }
+        try {
+            ssrcFactory.release(lease);
+        } catch (RuntimeException e) {
+            log.warn("[语音对讲] 释放SSRC lease失败，channelId={}", channelId, e);
+        }
+    }
+
+    private void stopTalkTimeoutTask(String taskKey) {
+        if (dynamicTask == null || taskKey == null) {
+            return;
+        }
+        try {
+            dynamicTask.stop(taskKey);
+        } catch (RuntimeException e) {
+            log.warn("[语音对讲] 停止超时任务失败，继续清理资源：taskKey={}", taskKey, e);
+        }
+    }
+
+    private void releaseTalkLease(Integer channelId, TalkSsrcOwner expectedOwner) {
+        if (channelId == null || expectedOwner == null || !talkSsrcLeases.remove(channelId, expectedOwner)) {
+            return;
+        }
+        stopTalkTimeoutTask(expectedOwner.timeoutTaskKey);
+        try {
+            ssrcFactory.release(expectedOwner.lease);
+        } catch (RuntimeException e) {
+            log.warn("[语音对讲] 释放SSRC lease失败，channelId={}, callId={}", channelId, expectedOwner.callId, e);
+        }
+    }
+
+    private void releaseTalkLeaseForCurrent(Integer channelId, SendRtpInfo sendRtpInfo) {
+        if (channelId == null) {
+            return;
+        }
+        TalkSsrcOwner owner = talkSsrcLeases.get(channelId);
+        if (owner == null) {
+            return;
+        }
+        if (sendRtpInfo != null && !Objects.equals(owner.stream, sendRtpInfo.getStream())) {
+            return;
+        }
+        if (sendRtpInfo != null && sendRtpInfo.getCallId() != null
+                && !Objects.equals(owner.callId, sendRtpInfo.getCallId())) {
+            return;
+        }
+        releaseTalkLease(channelId, owner);
+    }
+
+    private boolean matchesTalkOwner(TalkSsrcOwner owner, SendRtpInfo sendRtpInfo) {
+        if (owner == null || sendRtpInfo == null || !Objects.equals(owner.stream, sendRtpInfo.getStream())) {
+            return false;
+        }
+        if (owner.sendSsrc != null && !Objects.equals(owner.sendSsrc, sendRtpInfo.getSsrc())) {
+            return false;
+        }
+        return sendRtpInfo.getCallId() == null || owner.callId == null
+                || Objects.equals(owner.callId, sendRtpInfo.getCallId());
     }
 
     @Override
@@ -1946,25 +2234,62 @@ public class PlayServiceImpl implements IPlayService {
     private boolean closeInviteRtp(InviteInfo inviteInfo, String fallbackStream) {
         try {
             if (inviteInfo.getSsrcInfo() != null) {
-                receiveRtpServerService.closeRTPServer(inviteInfo.getSsrcInfo());
-            } else if (inviteInfo.getStreamInfo() != null) {
-                String app = inviteInfo.getStreamInfo().getApp() == null
-                        ? MediaStreamUtil.RTP_APP : inviteInfo.getStreamInfo().getApp();
-                String stream = inviteInfo.getStream();
-                if (stream == null) {
-                    stream = inviteInfo.getStreamInfo().getStream();
+                SSRCInfo ssrcInfo = inviteInfo.getSsrcInfo();
+                boolean claimed = receiveRtpServerService.closeRtpResource(ssrcInfo);
+                if (!claimed && ssrcInfo.getResourceId() == null) {
+                    // A handle-less legacy record must not be sent to the
+                    // listener close API. Clean only the published stream.
+                    closeInviteBusinessStream(inviteInfo, fallbackStream, ssrcInfo);
                 }
-                if (stream == null) {
-                    stream = fallbackStream;
-                }
-                if (stream != null) {
-                    receiveRtpServerService.closeRTPServer(inviteInfo.getStreamInfo().getMediaServer(), app, stream);
-                }
+            } else {
+                // Legacy InviteInfo may have only mediaServerId/business
+                // stream after deserialization; keep the safe business-only
+                // cleanup path available.
+                closeInviteBusinessStream(inviteInfo, fallbackStream, null);
             }
             return true;
         } catch (RuntimeException e) {
             log.warn("[停止点播] 关闭RTP资源失败: {}", e.getMessage());
             return false;
+        }
+    }
+
+    private void closeInviteBusinessStream(InviteInfo inviteInfo, String fallbackStream, SSRCInfo ssrcInfo) {
+        String app = MediaStreamUtil.RTP_APP;
+        MediaServer mediaServer = null;
+        if (inviteInfo.getStreamInfo() != null) {
+            app = inviteInfo.getStreamInfo().getApp() == null
+                    ? MediaStreamUtil.RTP_APP : inviteInfo.getStreamInfo().getApp();
+            mediaServer = inviteInfo.getStreamInfo().getMediaServer();
+        }
+        if (ssrcInfo != null) {
+            if (ssrcInfo.getApp() != null) {
+                app = ssrcInfo.getApp();
+            }
+            if (mediaServer == null && ssrcInfo.getMediaServerId() != null && mediaServerService != null) {
+                mediaServer = mediaServerService.getOne(ssrcInfo.getMediaServerId());
+            }
+        }
+        if (mediaServer == null && inviteInfo.getMediaServerId() != null && mediaServerService != null) {
+            mediaServer = mediaServerService.getOne(inviteInfo.getMediaServerId());
+        }
+        String stream = inviteInfo.getStream();
+        if (stream == null && inviteInfo.getStreamInfo() != null) {
+            stream = inviteInfo.getStreamInfo().getStream();
+        }
+        if (stream == null && ssrcInfo != null) {
+            stream = ssrcInfo.getStream();
+        }
+        if (stream == null) {
+            stream = fallbackStream;
+        }
+        if (mediaServer != null && stream != null) {
+            receiveRtpServerService.closeRTPServerByBusinessStreamIfUnowned(mediaServer, app, stream);
+            log.warn("[停止点播] 仅按业务流清理RTP：resourceId={}, businessStream={}, zlmStream={}, mediaServerId={}, port={}, "
+                            + "closeReason=owner unavailable, closeTargetType=BUSINESS_STREAM, zlmCloseHit=false",
+                    ssrcInfo == null ? null : ssrcInfo.getResourceId(), stream,
+                    ssrcInfo == null ? null : ssrcInfo.getZlmStream(), mediaServer.getId(),
+                    ssrcInfo == null ? null : ssrcInfo.getPort());
         }
     }
 
