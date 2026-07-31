@@ -49,6 +49,11 @@ public class UserSetting {
     private int platformPlayTimeout = 20000;
 
     /**
+     * Redis RPC 异步回调默认超时时间，单位：毫秒
+     */
+    private long redisRpcCallbackTtl = 30000L;
+
+    /**
      * 是否开启接口鉴权
      */
     private Boolean interfaceAuthentication = Boolean.TRUE;

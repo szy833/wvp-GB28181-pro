@@ -9,6 +9,7 @@ import com.genersoft.iot.vmp.conf.redis.bean.RedisRpcRequest;
 import com.genersoft.iot.vmp.conf.redis.bean.RedisRpcResponse;
 import com.genersoft.iot.vmp.service.redisMsg.dto.RpcController;
 import com.genersoft.iot.vmp.vmanager.bean.ErrorCode;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.task.TaskExecutor;
@@ -20,19 +21,22 @@ import org.springframework.stereotype.Component;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Component
 public class RedisRpcConfig implements MessageListener {
 
     public final static String REDIS_REQUEST_CHANNEL_KEY = "WVP_REDIS_REQUEST_CHANNEL_KEY";
-
-    private final Random random = new Random();
 
     @Autowired
     private UserSetting userSetting;
@@ -174,76 +178,197 @@ public class RedisRpcConfig implements MessageListener {
         redisTemplate.convertAndSend(REDIS_REQUEST_CHANNEL_KEY, message);
     }
 
-    private final Map<Long, SynchronousQueue<RedisRpcResponse>> topicSubscribers = new ConcurrentHashMap<>();
-    private final Map<Long, CommonCallback<RedisRpcResponse>> callbacks = new ConcurrentHashMap<>();
+    private static final long MIN_REQUEST_SN = 1_000_000L;
+
+    private final AtomicLong requestSequence = new AtomicLong(
+            ThreadLocalRandom.current().nextLong(MIN_REQUEST_SN, Long.MAX_VALUE - 1));
+    private final Map<Long, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService callbackTimeoutExecutor =
+            Executors.newSingleThreadScheduledExecutor(new RedisRpcThreadFactory());
+
+    private static final class RedisRpcThreadFactory implements ThreadFactory {
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "redis-rpc-timeout");
+            thread.setDaemon(true);
+            return thread;
+        }
+    }
+
+    private static final class PendingRequest {
+        private final SynchronousQueue<RedisRpcResponse> queue;
+        private final CommonCallback<RedisRpcResponse> callback;
+        private volatile ScheduledFuture<?> timeoutFuture;
+
+        private PendingRequest(SynchronousQueue<RedisRpcResponse> queue,
+                               CommonCallback<RedisRpcResponse> callback) {
+            this.queue = queue;
+            this.callback = callback;
+        }
+
+        private static PendingRequest synchronous() {
+            return new PendingRequest(new SynchronousQueue<>(), null);
+        }
+
+        private static PendingRequest asynchronous(CommonCallback<RedisRpcResponse> callback) {
+            return new PendingRequest(null, callback);
+        }
+
+        private void cancelTimeout() {
+            ScheduledFuture<?> future = timeoutFuture;
+            if (future != null) {
+                future.cancel(false);
+            }
+        }
+    }
 
     public RedisRpcResponse request(RedisRpcRequest request, long timeOut) {
         return request(request, timeOut, TimeUnit.SECONDS);
     }
 
     public RedisRpcResponse request(RedisRpcRequest request, long timeOut, TimeUnit timeUnit) {
-        request.setSn((long) random.nextInt(1000) + 1);
-        SynchronousQueue<RedisRpcResponse> subscribe = subscribe(request.getSn());
+        PendingRequest pendingRequest = PendingRequest.synchronous();
+        request.setSn(register(pendingRequest));
 
         try {
             sendRequest(request);
-            return subscribe.poll(timeOut, timeUnit);
+            RedisRpcResponse response = pendingRequest.queue.poll(timeOut, timeUnit);
+            if (response == null) {
+                return timeoutResponse(request);
+            }
+            return response;
         } catch (InterruptedException e) {
-            log.warn("[redis rpc timeout] uri: {}, sn: {}", request.getUri(), request.getSn(), e);
-            RedisRpcResponse redisRpcResponse = new RedisRpcResponse();
-            redisRpcResponse.setStatusCode(ErrorCode.ERROR486.getCode());
-            return redisRpcResponse;
+            Thread.currentThread().interrupt();
+            log.warn("[redis rpc interrupted] uri: {}, sn: {}", request.getUri(), request.getSn());
+            return timeoutResponse(request);
         } finally {
-            this.unsubscribe(request.getSn());
+            removePending(request.getSn(), pendingRequest);
         }
     }
 
     public void request(RedisRpcRequest request, CommonCallback<RedisRpcResponse> callback) {
-        request.setSn((long) random.nextInt(1000) + 1);
-        setCallback(request.getSn(), callback);
-        sendRequest(request);
+        request(request, callback, userSetting.getRedisRpcCallbackTtl(), TimeUnit.MILLISECONDS);
+    }
+
+    public void request(RedisRpcRequest request, CommonCallback<RedisRpcResponse> callback,
+                        long timeOut, TimeUnit timeUnit) {
+        PendingRequest pendingRequest = PendingRequest.asynchronous(callback);
+        request.setSn(register(pendingRequest));
+        long timeoutMillis = Math.max(1L, timeUnit.toMillis(timeOut));
+        ScheduledFuture<?> timeoutFuture = callbackTimeoutExecutor.schedule(
+                () -> expireCallback(request, pendingRequest), timeoutMillis, TimeUnit.MILLISECONDS);
+        pendingRequest.timeoutFuture = timeoutFuture;
+        if (pendingRequests.get(request.getSn()) != pendingRequest) {
+            timeoutFuture.cancel(false);
+            return;
+        }
+        try {
+            sendRequest(request);
+        } catch (RuntimeException e) {
+            if (removePending(request.getSn(), pendingRequest)) {
+                pendingRequest.cancelTimeout();
+            }
+            throw e;
+        }
     }
 
     public Boolean response(RedisRpcResponse response) {
-        SynchronousQueue<RedisRpcResponse> queue = topicSubscribers.get(response.getSn());
-        CommonCallback<RedisRpcResponse> callback = callbacks.get(response.getSn());
-        if (queue != null) {
+        if (response == null || !isResponseForCurrentServer(response)) {
+            return false;
+        }
+        PendingRequest pendingRequest = pendingRequests.remove(response.getSn());
+        if (pendingRequest == null) {
+            return false;
+        }
+        pendingRequest.cancelTimeout();
+        if (pendingRequest.queue != null) {
             try {
-                return queue.offer(response, 2, TimeUnit.SECONDS);
+                return pendingRequest.queue.offer(response, 2, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 log.error("{}", e.getMessage(), e);
             }
-        }else if (callback != null) {
-            callback.run(response);
-            callbacks.remove(response.getSn());
+        } else if (pendingRequest.callback != null) {
+            try {
+                pendingRequest.callback.run(response);
+            } catch (Exception e) {
+                log.error("[redis-rpc] callback执行异常, sn: {}", response.getSn(), e);
+            }
+            return true;
         }
         return false;
     }
 
-    private void unsubscribe(long key) {
-        topicSubscribers.remove(key);
+    private long register(PendingRequest pendingRequest) {
+        while (true) {
+            long sn = nextRequestSn();
+            if (pendingRequests.putIfAbsent(sn, pendingRequest) == null) {
+                return sn;
+            }
+        }
     }
 
-
-    private SynchronousQueue<RedisRpcResponse> subscribe(long key) {
-        SynchronousQueue<RedisRpcResponse> queue = null;
-        if (!topicSubscribers.containsKey(key))
-            topicSubscribers.put(key, queue = new SynchronousQueue<>());
-        return queue;
+    private long nextRequestSn() {
+        long sn = requestSequence.incrementAndGet();
+        if (sn > 0) {
+            return sn;
+        }
+        requestSequence.compareAndSet(sn, MIN_REQUEST_SN);
+        return requestSequence.incrementAndGet();
     }
 
-    private void setCallback(long key, CommonCallback<RedisRpcResponse> callback)  {
-        // TODO 如果多个上级点播同一个通道会有问题
-        callbacks.put(key, callback);
+    private RedisRpcResponse timeoutResponse(RedisRpcRequest request) {
+        RedisRpcResponse response = request.getResponse();
+        response.setStatusCode(ErrorCode.ERROR486.getCode());
+        return response;
+    }
+
+    private boolean isResponseForCurrentServer(RedisRpcResponse response) {
+        return userSetting.getServerId() != null
+                && userSetting.getServerId().equals(response.getFromId());
+    }
+
+    private void expireCallback(RedisRpcRequest request, PendingRequest pendingRequest) {
+        if (!removePending(request.getSn(), pendingRequest)) {
+            return;
+        }
+        RedisRpcResponse response = timeoutResponse(request);
+        try {
+            pendingRequest.callback.run(response);
+        } catch (Exception e) {
+            log.error("[redis-rpc] callback超时处理异常, sn: {}", request.getSn(), e);
+        }
+    }
+
+    private boolean removePending(long sn, PendingRequest pendingRequest) {
+        boolean removed = pendingRequests.remove(sn, pendingRequest);
+        if (removed) {
+            pendingRequest.cancelTimeout();
+        }
+        return removed;
     }
 
     public void removeCallback(long key)  {
-        callbacks.remove(key);
+        PendingRequest pendingRequest = pendingRequests.remove(key);
+        if (pendingRequest != null) {
+            pendingRequest.cancelTimeout();
+        }
     }
 
 
     public int getCallbackCount(){
-        return callbacks.size();
+        int count = 0;
+        for (PendingRequest pendingRequest : pendingRequests.values()) {
+            if (pendingRequest.callback != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    @PreDestroy
+    private void shutdown() {
+        callbackTimeoutExecutor.shutdownNow();
     }
 
 
@@ -251,8 +376,7 @@ public class RedisRpcConfig implements MessageListener {
 
 //    @Scheduled(fixedRate = 1000)   //每1秒执行一次
 //    public void execute(){
-//        logger.info("callbacks的长度: " + callbacks.size());
-//        logger.info("队列的长度: " + topicSubscribers.size());
+//        logger.info("pendingRequests的长度: " + pendingRequests.size());
 //        logger.info("HOOK监听的长度: " + hookSubscribe.size());
 //        logger.info("");
 //    }

@@ -99,6 +99,8 @@ media:
     send-port-range: 50000,55000 # 端口范围
 # [根据业务需求配置]
 user-settings:
+  # Redis RPC 异步回调超时时间，单位：毫秒
+  redis-rpc-callback-ttl: 30000
   # 点播/录像回放 等待超时时间,单位：毫秒
   play-timeout: 180000
   # [可选] 多端口模式使用随机SSRC，SSRC允许重复（默认false）

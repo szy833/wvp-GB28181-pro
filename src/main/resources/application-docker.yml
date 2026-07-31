@@ -74,6 +74,8 @@ media:
 
 # [根据业务需求配置]
 user-settings:
+    # Redis RPC 异步回调超时时间，单位：毫秒
+    redis-rpc-callback-ttl: 30000
     # 推流直播是否录制
     record-push-live: true
     auto-apply-play: true

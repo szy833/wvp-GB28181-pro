@@ -188,6 +188,8 @@ media:
 
 # [根据业务需求配置]
 user-settings:
+    # Redis RPC 异步回调超时时间，单位：毫秒
+    redis-rpc-callback-ttl: 30000
     # 服务ID，不写则为000000
     server-id:
     # [可选] 自动点播， 使用固定流地址进行播放时，如果未点播则自动进行点播, 需要rtp.enable=true
