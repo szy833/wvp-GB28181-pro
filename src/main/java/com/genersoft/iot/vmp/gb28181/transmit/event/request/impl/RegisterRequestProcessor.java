@@ -41,6 +41,7 @@ import java.text.ParseException;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * SIP命令类型： REGISTER请求
@@ -147,20 +148,38 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
         if (device != null && device.getSipTransactionInfo() != null &&
                 request.getCallIdHeader().getCallId().equals(device.getSipTransactionInfo().getCallId())) {
             log.info("[注册续订] 设备：{}", device.getDeviceId());
-            device.setExpires(request.getExpires().getExpires());
-            device.setIp(remoteAddressInfo.getIp());
-            device.setPort(remoteAddressInfo.getPort());
-            device.setHostAddress(IpPortUtil.concatenateIpAndPort(remoteAddressInfo.getIp(), String.valueOf(remoteAddressInfo.getPort())));
-            device.setLocalIp(request.getLocalAddress().getHostAddress());
+            int expires = request.getExpires().getExpires();
+            String ip = remoteAddressInfo.getIp();
+            int port = remoteAddressInfo.getPort();
+            String hostAddress = IpPortUtil.concatenateIpAndPort(ip, String.valueOf(port));
+            String localIp = request.getLocalAddress().getHostAddress();
 
             ViaHeader reqViaHeader = (ViaHeader) request.getHeader(ViaHeader.NAME);
             String transport = reqViaHeader.getTransport();
-            device.setTransport("TCP".equalsIgnoreCase(transport) ? "TCP" : "UDP");
+            String normalizedTransport = "TCP".equalsIgnoreCase(transport) ? "TCP" : "UDP";
+            boolean registrationInfoChanged = device.getExpires() != expires
+                    || !Objects.equals(device.getIp(), ip)
+                    || device.getPort() != port
+                    || !Objects.equals(device.getHostAddress(), hostAddress)
+                    || !Objects.equals(device.getLocalIp(), localIp)
+                    || !Objects.equals(device.getTransport(), normalizedTransport);
+
+            device.setExpires(expires);
+            device.setIp(ip);
+            device.setPort(port);
+            device.setHostAddress(hostAddress);
+            device.setLocalIp(localIp);
+            device.setTransport(normalizedTransport);
 
             Response okResponse = getRegisterOkResponse(request);
             sipSender.transmitRequest(request.getLocalAddress().getHostAddress(), okResponse);
             device.setRegisterTimeStamp(System.currentTimeMillis());
-            deviceService.online(device);
+            if (device.isOnLine()) {
+                deviceService.onlineRenewal(device, registrationInfoChanged);
+            } else {
+                // Cache may lag behind the database; preserve the full recovery path for offline devices.
+                deviceService.online(device);
+            }
             redisCatchStorage.updateDeviceRegisterTimeStamp(List.of(device));
             return;
         }

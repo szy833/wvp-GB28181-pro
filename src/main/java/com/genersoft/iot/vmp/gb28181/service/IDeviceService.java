@@ -24,6 +24,14 @@ public interface IDeviceService {
     void online(Device device);
 
     /**
+     * 处理已在线设备的 REGISTER 续订，只刷新过期状态；注册信息变化时同步持久化。
+     *
+     * @param device 设备信息
+     * @param registrationInfoChanged 注册网络信息是否发生变化
+     */
+    void onlineRenewal(Device device, boolean registrationInfoChanged);
+
+    /**
      * 设备下线
      */
     void offline(Device device);

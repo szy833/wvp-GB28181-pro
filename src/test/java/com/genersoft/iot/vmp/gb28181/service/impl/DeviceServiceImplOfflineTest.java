@@ -3,6 +3,7 @@ package com.genersoft.iot.vmp.gb28181.service.impl;
 import com.genersoft.iot.vmp.gb28181.bean.Device;
 import com.genersoft.iot.vmp.gb28181.bean.DeviceChannel;
 import com.genersoft.iot.vmp.gb28181.bean.SsrcTransaction;
+import com.genersoft.iot.vmp.gb28181.dao.DeviceMapper;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
 import com.genersoft.iot.vmp.gb28181.service.IPlayService;
 import com.genersoft.iot.vmp.gb28181.session.AudioBroadcastManager;
@@ -11,6 +12,7 @@ import com.genersoft.iot.vmp.gb28181.task.deviceStatus.DeviceStatusManager;
 import com.genersoft.iot.vmp.gb28181.task.deviceSubscribe.SubscribeTaskRunner;
 import com.genersoft.iot.vmp.service.IReceiveRtpServerService;
 import com.genersoft.iot.vmp.service.ISendRtpServerService;
+import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -19,6 +21,43 @@ import java.util.List;
 import static org.mockito.Mockito.*;
 
 class DeviceServiceImplOfflineTest {
+
+    @Test
+    void onlineRenewalOnlyRefreshesStatusWhenRegistrationInfoIsUnchanged() {
+        DeviceServiceImpl service = new DeviceServiceImpl();
+        DeviceStatusManager deviceStatusManager = mock(DeviceStatusManager.class);
+        DeviceMapper deviceMapper = mock(DeviceMapper.class);
+        IRedisCatchStorage redisCatchStorage = mock(IRedisCatchStorage.class);
+        Device device = onlineDevice();
+
+        ReflectionTestUtils.setField(service, "deviceStatusManager", deviceStatusManager);
+        ReflectionTestUtils.setField(service, "deviceMapper", deviceMapper);
+        ReflectionTestUtils.setField(service, "redisCatchStorage", redisCatchStorage);
+
+        service.onlineRenewal(device, false);
+
+        verify(deviceStatusManager).add(eq("device-1"), anyLong());
+        verifyNoInteractions(deviceMapper, redisCatchStorage);
+    }
+
+    @Test
+    void onlineRenewalPersistsChangedRegistrationInfo() {
+        DeviceServiceImpl service = new DeviceServiceImpl();
+        DeviceStatusManager deviceStatusManager = mock(DeviceStatusManager.class);
+        DeviceMapper deviceMapper = mock(DeviceMapper.class);
+        IRedisCatchStorage redisCatchStorage = mock(IRedisCatchStorage.class);
+        Device device = onlineDevice();
+
+        ReflectionTestUtils.setField(service, "deviceStatusManager", deviceStatusManager);
+        ReflectionTestUtils.setField(service, "deviceMapper", deviceMapper);
+        ReflectionTestUtils.setField(service, "redisCatchStorage", redisCatchStorage);
+
+        service.onlineRenewal(device, true);
+
+        verify(deviceStatusManager).add(eq("device-1"), anyLong());
+        verify(deviceMapper).update(device);
+        verify(redisCatchStorage).updateDevice(device);
+    }
 
     @Test
     void cleanOfflineDeviceStopsTalkBeforeGenericSsrcCleanup() {
@@ -64,5 +103,15 @@ class DeviceServiceImplOfflineTest {
         verify(playService).stopTalkForDevice(device);
         verify(receiveRtp, never()).closeRTPServerBySsrcId(any(), any(), any());
         verify(sessionManager).removeByCallId("call-talk");
+    }
+
+    private Device onlineDevice() {
+        Device device = new Device();
+        device.setDeviceId("device-1");
+        device.setOnLine(true);
+        device.setExpires(60);
+        device.setHeartBeatInterval(60);
+        device.setHeartBeatCount(3);
+        return device;
     }
 }

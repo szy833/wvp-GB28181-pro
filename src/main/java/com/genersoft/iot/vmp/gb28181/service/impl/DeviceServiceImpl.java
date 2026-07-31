@@ -441,6 +441,21 @@ public class DeviceServiceImpl implements IDeviceService {
             }
         }
 
+        refreshDeviceStatus(device);
+    }
+
+    @Override
+    public void onlineRenewal(Device device, boolean registrationInfoChanged) {
+        if (registrationInfoChanged) {
+            device.setUpdateTime(DateUtil.getNow());
+            device.setOnLine(true);
+            deviceMapper.update(device);
+            redisCatchStorage.updateDevice(device);
+        }
+        refreshDeviceStatus(device);
+    }
+
+    private void refreshDeviceStatus(Device device) {
         // 设备状态任务添加
         long expiresTime = Math.min(device.getExpires(), device.getHeartBeatInterval() * device.getHeartBeatCount()) * 1000L;
         deviceStatusManager.add(device.getDeviceId(), expiresTime + System.currentTimeMillis());
