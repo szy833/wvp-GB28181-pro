@@ -21,15 +21,16 @@ import java.util.Set;
 public class RedisUtil {
 
     /**
-     * 模糊查询
+     * 按 Redis Glob 模式扫描 Key。调用方负责提供完整的 MATCH pattern。
      *
-     * @param query 查询参数
-     * @return
+     * @param redisTemplate Redis 模板
+     * @param pattern Redis Glob 模式，支持 *, ?, [] 等通配符
+     * @return 匹配到的 Key
      */
-    public static List<Object> scan(RedisTemplate redisTemplate, String query) {
+    public static List<Object> scan(RedisTemplate redisTemplate, String pattern) {
 
         Set<String> resultKeys = (Set<String>) redisTemplate.execute((RedisCallback<Set<String>>) connection -> {
-            ScanOptions scanOptions = ScanOptions.scanOptions().match("*" + query + "*").count(1000).build();
+            ScanOptions scanOptions = ScanOptions.scanOptions().match(pattern).count(1000).build();
             Cursor<byte[]> scan = connection.scan(scanOptions);
             Set<String> keys = new HashSet<>();
             while (scan.hasNext()) {
