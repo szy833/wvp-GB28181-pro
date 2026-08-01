@@ -94,13 +94,18 @@ public class MediaStatusNotifyMessageHandler extends SIPRequestProcessorParent i
             SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByCallId(callIdHeader.getCallId());
             if (ssrcTransaction != null) {
                 log.info("[录像流]推送完毕，关流通知， device: {}, channelId: {}", ssrcTransaction.getDeviceId(), ssrcTransaction.getChannelId());
-                InviteInfo inviteInfo = inviteStreamService.getInviteInfo(InviteSessionType.DOWNLOAD, ssrcTransaction.getChannelId(), ssrcTransaction.getStream());
-                if (inviteInfo != null) {
-                    playService.stop(inviteInfo);
+                InviteSessionType sessionType = ssrcTransaction.getType();
+                if (sessionType == InviteSessionType.DOWNLOAD || sessionType == InviteSessionType.PLAYBACK) {
+                    InviteInfo inviteInfo = inviteStreamService.getInviteInfo(sessionType,
+                            ssrcTransaction.getChannelId(), ssrcTransaction.getStream());
+                    if (inviteInfo != null) {
+                        playService.stop(inviteInfo);
+                    }
+                    // 去除监听流注销自动停止的监听
+                    Hook hook = Hook.getInstance(HookType.on_media_arrival, MediaStreamUtil.RTP_APP,
+                            ssrcTransaction.getStream(), ssrcTransaction.getMediaServerId());
+                    subscribe.removeSubscribe(hook);
                 }
-                // 去除监听流注销自动停止下载的监听
-                Hook hook = Hook.getInstance(HookType.on_media_arrival, MediaStreamUtil.RTP_APP, ssrcTransaction.getStream(), ssrcTransaction.getMediaServerId());
-                subscribe.removeSubscribe(hook);
                 if (ssrcTransaction.getPlatformId() != null) {
                     // 如果级联播放，需要给上级发送此通知 TODO 多个上级同时观看一个下级 可能存在停错的问题，需要将点播CallId进行上下级绑定
                     SendRtpInfo sendRtpInfo =  sendRtpServerService.queryByChannelId(ssrcTransaction.getChannelId(), ssrcTransaction.getPlatformId());

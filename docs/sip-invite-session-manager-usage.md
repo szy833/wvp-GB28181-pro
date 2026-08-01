@@ -257,7 +257,7 @@ stream
 | `InviteRequestProcessor` | `put` | 保存设备发起的语音广播会话 |
 | `ByeRequestProcessor` | `getSsrcTransactionByCallId` / `removeByCallId` | 处理设备 BYE |
 | `MessageRequestProcessor` | `getSsrcTransactionByCallId` | 根据会话修正设备身份 |
-| `MediaStatusNotifyMessageHandler` | `getSsrcTransactionByCallId` | 处理下载结束通知 |
+| `MediaStatusNotifyMessageHandler` | `getSsrcTransactionByCallId` | 按会话类型处理下载/回放结束通知 |
 | `PlayServiceImpl` | 按流查询、删除、`getAll` | 点播/回放/下载/对讲的超时、停止、重建和 ZLM 下线 |
 | `PlatformServiceImpl` | 按流查询、删除、`put` | 平台级联停止、SSRC 修正和异常清理 |
 | `DeviceServiceImpl` | `getSsrcTransactionByDeviceId` / `removeByCallId` | 设备离线释放 RTP 和 SIP 会话 |
