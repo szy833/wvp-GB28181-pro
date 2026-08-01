@@ -97,6 +97,11 @@ public interface IInviteStreamService {
     void clearInviteInfo(String deviceId);
 
     /**
+     * 清理设备离线时仍占用资源的 InviteInfo，保留已完成下载的保留记录。
+     */
+    int clearActiveInviteInfoByDeviceId(String deviceId);
+
+    /**
      * 统计同一个zlm下的国标收流个数
      */
     int getStreamInfoCount(String mediaServerId);

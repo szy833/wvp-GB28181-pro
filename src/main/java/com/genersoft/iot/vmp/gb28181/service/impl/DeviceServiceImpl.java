@@ -332,14 +332,43 @@ public class DeviceServiceImpl implements IDeviceService {
                 audioBroadcastManager.del(audioBroadcastCatch.getChannelId());
             }
         }
+        try {
+            int removed = inviteStreamService.clearActiveInviteInfoByDeviceId(device.getDeviceId());
+            log.info("[设备离线] 清理活跃InviteInfo：deviceId={}, removed={}", device.getDeviceId(), removed);
+        } catch (RuntimeException e) {
+            log.warn("[设备离线] 清理活跃InviteInfo失败：deviceId={}", device.getDeviceId(), e);
+        }
     }
 
     // 监听设备过期事件
     @Async
     @EventListener
     public void onApplicationEvent(DeviceOfflineEvent event) {
-        log.info("[设备状态] 到期， 编号： {}", event.getDeviceIds().toString());
-        List<Device> deviceList = redisCatchStorage.getDeviceList(event.getDeviceIds());
+        if (event == null || event.getDeviceIds() == null || event.getDeviceIds().isEmpty()) {
+            return;
+        }
+        Set<String> stillExpiredIds = new HashSet<>();
+        for (String deviceId : event.getDeviceIds()) {
+            if (deviceId == null || deviceId.isEmpty()) {
+                continue;
+            }
+            boolean renewed = false;
+            try {
+                renewed = deviceStatusManager.contains(deviceId);
+            } catch (RuntimeException e) {
+                log.warn("[设备状态] 校验离线事件失败，继续处理：deviceId={}", deviceId, e);
+            }
+            if (!renewed) {
+                stillExpiredIds.add(deviceId);
+            } else {
+                log.info("[设备状态] 忽略已重新上线的过期事件：deviceId={}", deviceId);
+            }
+        }
+        if (stillExpiredIds.isEmpty()) {
+            return;
+        }
+        log.info("[设备状态] 到期， 编号： {}", stillExpiredIds);
+        List<Device> deviceList = redisCatchStorage.getDeviceList(stillExpiredIds);
         offline(deviceList);
     }
 

@@ -4,7 +4,9 @@ import com.genersoft.iot.vmp.gb28181.bean.Device;
 import com.genersoft.iot.vmp.gb28181.bean.DeviceChannel;
 import com.genersoft.iot.vmp.gb28181.bean.SsrcTransaction;
 import com.genersoft.iot.vmp.gb28181.dao.DeviceMapper;
+import com.genersoft.iot.vmp.gb28181.event.device.DeviceOfflineEvent;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceChannelService;
+import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import com.genersoft.iot.vmp.gb28181.service.IPlayService;
 import com.genersoft.iot.vmp.gb28181.session.AudioBroadcastManager;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.mockito.Mockito.*;
 
@@ -69,6 +72,7 @@ class DeviceServiceImplOfflineTest {
         AudioBroadcastManager audioBroadcastManager = mock(AudioBroadcastManager.class);
         IDeviceChannelService deviceChannelService = mock(IDeviceChannelService.class);
         IPlayService playService = mock(IPlayService.class);
+        IInviteStreamService inviteStreamService = mock(IInviteStreamService.class);
 
         Device device = new Device();
         device.setDeviceId("device-1");
@@ -96,13 +100,35 @@ class DeviceServiceImplOfflineTest {
         ReflectionTestUtils.setField(service, "audioBroadcastManager", audioBroadcastManager);
         ReflectionTestUtils.setField(service, "deviceChannelService", deviceChannelService);
         ReflectionTestUtils.setField(service, "playService", playService);
+        ReflectionTestUtils.setField(service, "inviteStreamService", inviteStreamService);
 
         ReflectionTestUtils.invokeMethod(service, "cleanOfflineDevice", device);
 
         verify(playService).stopTalk(device, channel, null);
         verify(playService).stopTalkForDevice(device);
+        verify(inviteStreamService).clearActiveInviteInfoByDeviceId("device-1");
         verify(receiveRtp, never()).closeRTPServerBySsrcId(any(), any(), any());
         verify(sessionManager).removeByCallId("call-talk");
+    }
+
+    @Test
+    void offlineEventSkipsDeviceThatRegisteredAgain() {
+        DeviceServiceImpl service = spy(new DeviceServiceImpl());
+        IRedisCatchStorage redisCatchStorage = mock(IRedisCatchStorage.class);
+        DeviceStatusManager deviceStatusManager = mock(DeviceStatusManager.class);
+        Device device = onlineDevice();
+        DeviceOfflineEvent event = new DeviceOfflineEvent(this);
+        event.setDeviceIds(Set.of("device-1"));
+
+        when(redisCatchStorage.getDeviceList(event.getDeviceIds())).thenReturn(List.of(device));
+        when(deviceStatusManager.contains("device-1")).thenReturn(true);
+        doNothing().when(service).offline(anyList());
+        ReflectionTestUtils.setField(service, "redisCatchStorage", redisCatchStorage);
+        ReflectionTestUtils.setField(service, "deviceStatusManager", deviceStatusManager);
+
+        service.onApplicationEvent(event);
+
+        verify(service, never()).offline(anyList());
     }
 
     private Device onlineDevice() {

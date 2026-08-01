@@ -97,6 +97,43 @@ class InviteStreamServiceImplTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void offlineCleanupRemovesActiveInviteButRetainsCompletedDownload() {
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        SetOperations<String, Object> set = mock(SetOperations.class);
+        ValueOperations<String, Object> values = mock(ValueOperations.class);
+        HashOperations<String, Object, Object> hash = mock(HashOperations.class);
+        Cursor<Object> cursor = mock(Cursor.class);
+        InviteInfo active = invite(InviteSessionType.PLAY, InviteSessionStatus.ok);
+        active.setStreamInfo(new StreamInfo());
+        InviteInfo completedDownload = invite(InviteSessionType.DOWNLOAD, InviteSessionStatus.ok);
+        StreamInfo completedStream = new StreamInfo();
+        completedStream.setProgress(1.0);
+        completedDownload.setStreamInfo(completedStream);
+        completedDownload.setCleanupAt(System.currentTimeMillis() + 60_000L);
+
+        when(redis.opsForSet()).thenReturn(set);
+        when(redis.opsForValue()).thenReturn(values);
+        when(redis.opsForHash()).thenReturn(hash);
+        when(values.get(VideoManagerConstants.INVITE_INDEX_READY)).thenReturn("ready");
+        when(set.scan(eq(VideoManagerConstants.INVITE_INDEX_DEVICE_PREFIX + "device-1"), any()))
+                .thenReturn(cursor);
+        when(cursor.hasNext()).thenReturn(true, true, false);
+        when(cursor.next()).thenReturn("PLAY:1:stream-1", "DOWNLOAD:1:stream-1");
+        when(hash.get(VideoManagerConstants.INVITE_PREFIX, "PLAY:1:stream-1")).thenReturn(active);
+        when(hash.get(VideoManagerConstants.INVITE_PREFIX, "DOWNLOAD:1:stream-1")).thenReturn(completedDownload);
+
+        InviteStreamServiceImpl service = spy(new InviteStreamServiceImpl());
+        ReflectionTestUtils.setField(service, "redisTemplate", redis);
+        doReturn(true).when(service).removeInviteInfoIfSame(active);
+
+        service.clearActiveInviteInfoByDeviceId("device-1");
+
+        verify(service).removeInviteInfoIfSame(active);
+        verify(service, never()).removeInviteInfoIfSame(completedDownload);
+    }
+
+    @Test
     void completedDownloadAtCleanupAtIsRemovedConditionally() {
         InviteInfo download = invite(InviteSessionType.DOWNLOAD, InviteSessionStatus.ok);
         StreamInfo streamInfo = new StreamInfo();

@@ -849,6 +849,55 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
     }
 
     @Override
+    public int clearActiveInviteInfoByDeviceId(String deviceId) {
+        if (deviceId == null || deviceId.isEmpty()) {
+            return 0;
+        }
+        String indexKey = VideoManagerConstants.INVITE_INDEX_DEVICE_PREFIX + deviceId;
+        List<InviteInfo> inviteInfoList;
+        long now = System.currentTimeMillis();
+        Predicate<InviteInfo> shouldRemove = inviteInfo -> !isRetainedCompletedDownload(inviteInfo, now);
+        if (inviteIndexesReady()) {
+            try {
+                inviteInfoList = findIndexedInvites(indexKey, shouldRemove);
+            } catch (RuntimeException e) {
+                log.warn("[Redis-InviteInfo] 设备离线索引读取失败，回退主Hash: key={}", indexKey, e);
+                PrimaryScanResult scan = findInvitesByPrimaryScan(
+                        inviteInfo -> deviceId.equals(inviteInfo.getDeviceId()) && shouldRemove.test(inviteInfo));
+                if (!scan.complete()) {
+                    log.warn("[Redis-InviteInfo] 设备离线清理扫描不完整，保留所有记录: deviceId={}", deviceId);
+                    return 0;
+                }
+                inviteInfoList = scan.invites();
+            }
+        } else {
+            PrimaryScanResult scan = findInvitesByPrimaryScan(
+                    inviteInfo -> deviceId.equals(inviteInfo.getDeviceId()) && shouldRemove.test(inviteInfo));
+            if (!scan.complete()) {
+                log.warn("[Redis-InviteInfo] 设备离线清理扫描不完整，保留所有记录: deviceId={}", deviceId);
+                return 0;
+            }
+            inviteInfoList = scan.invites();
+        }
+        int removed = 0;
+        for (InviteInfo inviteInfo : inviteInfoList) {
+            if (removeInviteInfoIfSame(inviteInfo)) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    private boolean isRetainedCompletedDownload(InviteInfo inviteInfo, long now) {
+        return inviteInfo != null
+                && inviteInfo.getType() == InviteSessionType.DOWNLOAD
+                && inviteInfo.getStreamInfo() != null
+                && inviteInfo.getStreamInfo().getProgress() >= 1
+                && inviteInfo.getCleanupAt() != null
+                && now < inviteInfo.getCleanupAt();
+    }
+
+    @Override
     public int getStreamInfoCount(String mediaServerId) {
         if (inviteIndexesReady()) {
             String activeMediaKey = InviteInfoRedisIndex.activeMediaKey(mediaServerId);
