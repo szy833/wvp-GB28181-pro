@@ -19,6 +19,7 @@ import com.genersoft.iot.vmp.media.event.mediaServer.MediaServerOfflineEvent;
 import com.genersoft.iot.vmp.media.event.mediaServer.MediaServerOnlineEvent;
 import com.genersoft.iot.vmp.media.service.IMediaNodeServerService;
 import com.genersoft.iot.vmp.media.service.IMediaServerService;
+import com.genersoft.iot.vmp.media.service.bean.MediaStreamCountResult;
 import com.genersoft.iot.vmp.media.zlm.dto.StreamAuthorityInfo;
 import com.genersoft.iot.vmp.media.zlm.dto.hook.OriginType;
 import com.genersoft.iot.vmp.service.bean.DownloadFileInfo;
@@ -40,12 +41,15 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.ObjectUtils;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 媒体服务器节点管理
@@ -77,6 +81,11 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Autowired
     private MediaConfig mediaConfig;
+
+    @Autowired
+    private TaskExecutor taskExecutor;
+
+    private final Set<String> loadReconciliationInFlight = ConcurrentHashMap.newKeySet();
 
 
     /**
@@ -394,22 +403,84 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public void resetOnlineServerItem(MediaServer serverItem) {
-        // 更新缓存
-        String key = VideoManagerConstants.ONLINE_MEDIA_SERVERS_PREFIX + userSetting.getServerId();
-        // 使用zset的分数作为当前并发量， 默认值设置为0
-        if (redisTemplate.opsForZSet().score(key, serverItem.getId()) == null) {  // 不存在则设置默认值 已存在则重置
-            redisTemplate.opsForZSet().add(key, serverItem.getId(), 0L);
-            // 查询服务流数量
-            int count = getMediaList(serverItem);
-            redisTemplate.opsForZSet().add(key, serverItem.getId(), count);
-        }else {
-            clearRTPServer(serverItem);
+        if (serverItem == null || serverItem.getId() == null) {
+            return;
+        }
+        String key = onlineMediaServerKey();
+        if (redisTemplate.opsForZSet().score(key, serverItem.getId()) == null) {
+            redisTemplate.opsForZSet().add(key, serverItem.getId(), 0D);
+        }
+        submitLoadReconciliation(serverItem);
+    }
+
+    private String onlineMediaServerKey() {
+        return VideoManagerConstants.ONLINE_MEDIA_SERVERS_PREFIX + userSetting.getServerId();
+    }
+
+    private void submitLoadReconciliation(MediaServer mediaServer) {
+        if (mediaServer == null || mediaServer.getId() == null
+                || !loadReconciliationInFlight.add(mediaServer.getId())) {
+            return;
+        }
+        if (taskExecutor == null) {
+            loadReconciliationInFlight.remove(mediaServer.getId());
+            log.warn("[媒体节点负载对账] 未配置任务执行器，跳过：{}", mediaServer.getId());
+            return;
+        }
+        try {
+            taskExecutor.execute(() -> {
+                try {
+                    reconcileMediaServerLoad(mediaServer);
+                } finally {
+                    loadReconciliationInFlight.remove(mediaServer.getId());
+                }
+            });
+        } catch (RuntimeException e) {
+            loadReconciliationInFlight.remove(mediaServer.getId());
+            log.warn("[媒体节点负载对账] 提交任务失败：{}", mediaServer.getId(), e);
         }
     }
 
-    private int getMediaList(MediaServer serverItem) {
+    void reconcileMediaServerLoad(MediaServer mediaServer) {
+        if (mediaServer == null || mediaServer.getId() == null || !mediaServer.isStatus()) {
+            return;
+        }
+        IMediaNodeServerService nodeService = nodeServerServiceMap.get(mediaServer.getType());
+        if (nodeService == null) {
+            log.warn("[媒体节点负载对账] 未找到节点实现：{}，类型：{}", mediaServer.getId(), mediaServer.getType());
+            return;
+        }
+        final MediaStreamCountResult result;
+        try {
+            result = nodeService.countActiveStreams(mediaServer);
+        } catch (RuntimeException e) {
+            log.warn("[媒体节点负载对账] 查询异常：{}", mediaServer.getId(), e);
+            return;
+        }
+        if (result == null || result.isFailure()) {
+            log.warn("[媒体节点负载对账] 查询失败：{}，原因：{}", mediaServer.getId(),
+                    result == null ? "空结果" : result.getReason());
+            return;
+        }
+        redisTemplate.opsForZSet().add(onlineMediaServerKey(), mediaServer.getId(), result.getCount());
+        log.debug("[媒体节点负载对账] 更新成功：{}，活跃流：{}", mediaServer.getId(), result.getCount());
+    }
 
-        return 0;
+    @Scheduled(fixedDelayString = "${media.load-reconcile-interval-ms:60000}")
+    public void reconcileOnlineMediaServerLoads() {
+        List<MediaServer> onlineServers;
+        try {
+            onlineServers = getAllOnlineList();
+        } catch (RuntimeException e) {
+            log.warn("[媒体节点负载对账] 获取在线节点失败", e);
+            return;
+        }
+        if (onlineServers == null) {
+            return;
+        }
+        for (MediaServer mediaServer : onlineServers) {
+            submitLoadReconciliation(mediaServer);
+        }
     }
 
 
@@ -425,8 +496,14 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public void removeCount(String mediaServerId) {
+        if (mediaServerId == null) {
+            return;
+        }
         String key = VideoManagerConstants.ONLINE_MEDIA_SERVERS_PREFIX + userSetting.getServerId();
-        redisTemplate.opsForZSet().incrementScore(key, mediaServerId, - 1);
+        Double score = redisTemplate.opsForZSet().incrementScore(key, mediaServerId, -1);
+        if (score != null && score < 0) {
+            redisTemplate.opsForZSet().add(key, mediaServerId, 0D);
+        }
     }
 
     /**

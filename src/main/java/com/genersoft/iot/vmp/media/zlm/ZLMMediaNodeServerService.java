@@ -17,6 +17,7 @@ import com.genersoft.iot.vmp.media.event.hook.Hook;
 import com.genersoft.iot.vmp.media.event.hook.HookSubscribe;
 import com.genersoft.iot.vmp.media.event.hook.HookType;
 import com.genersoft.iot.vmp.media.service.IMediaNodeServerService;
+import com.genersoft.iot.vmp.media.service.bean.MediaStreamCountResult;
 import com.genersoft.iot.vmp.media.zlm.dto.*;
 import com.genersoft.iot.vmp.service.bean.DownloadFileInfo;
 import com.genersoft.iot.vmp.service.bean.ErrorCallback;
@@ -26,6 +27,7 @@ import com.genersoft.iot.vmp.vmanager.bean.WVPResult;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.ObjectUtils;
 
@@ -47,6 +49,9 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
 
     @Autowired
     private HookSubscribe subscribe;
+
+    @Value("${media.load-reconcile-timeout-sec:3}")
+    private int loadReconcileTimeoutSec = 3;
 
     @Override
     public int createRTPServer(MediaServer mediaServer, String app, String stream, long ssrc, Integer port, Boolean onlyAuto, Boolean disableAudio, Boolean reUsePort, Integer tcpMode) {
@@ -196,7 +201,7 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
                     return streamInfoList;
                 }
                 for (int i = 0; i < zlmResult.getData().size(); i++) {
-                    JSONObject mediaJSON = zlmResult.getData().getJSONObject(0);
+                    JSONObject mediaJSON = zlmResult.getData().getJSONObject(i);
                     MediaInfo mediaInfo = MediaInfo.getInstance(mediaJSON, mediaServer, userSetting.getServerId());
                     StreamInfo streamInfo = getStreamInfoByAppAndStream(mediaServer, mediaInfo.getApp(),
                             mediaInfo.getStream(), mediaInfo, null, callId, true);
@@ -207,6 +212,41 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
             }
         }
         return streamInfoList;
+    }
+
+    @Override
+    public MediaStreamCountResult countActiveStreams(MediaServer mediaServer) {
+        final ZLMResult<JSONArray> zlmResult;
+        try {
+            zlmResult = zlmresTfulUtils.getMediaList(mediaServer, null, null, "rtsp", null,
+                    loadReconcileTimeoutSec);
+        } catch (RuntimeException e) {
+            log.warn("[ZLM] 查询活跃流数量失败，节点：{}", mediaServer == null ? null : mediaServer.getId(), e);
+            return MediaStreamCountResult.failure(e.getMessage());
+        }
+        if (zlmResult == null) {
+            return MediaStreamCountResult.failure("ZLM返回为空");
+        }
+        if (zlmResult.getCode() != 0) {
+            return MediaStreamCountResult.failure("ZLM响应码：" + zlmResult.getCode());
+        }
+        JSONArray data = zlmResult.getData();
+        if (data == null || data.isEmpty()) {
+            return MediaStreamCountResult.success(0);
+        }
+        Set<String> streams = new HashSet<>();
+        for (int i = 0; i < data.size(); i++) {
+            JSONObject media = data.getJSONObject(i);
+            if (media == null) {
+                continue;
+            }
+            String app = media.getString("app");
+            String stream = media.getString("stream");
+            if (stream != null && !stream.isBlank()) {
+                streams.add((app == null ? "" : app) + '\u0000' + stream);
+            }
+        }
+        return MediaStreamCountResult.success(streams.size());
     }
 
     @Override

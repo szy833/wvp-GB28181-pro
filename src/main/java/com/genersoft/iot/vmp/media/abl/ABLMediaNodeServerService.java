@@ -20,6 +20,7 @@ import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.bean.RecordInfo;
 import com.genersoft.iot.vmp.media.event.media.MediaRecordMp4Event;
 import com.genersoft.iot.vmp.media.service.IMediaNodeServerService;
+import com.genersoft.iot.vmp.media.service.bean.MediaStreamCountResult;
 import com.genersoft.iot.vmp.service.bean.CloudRecordItem;
 import com.genersoft.iot.vmp.service.bean.DownloadFileInfo;
 import com.genersoft.iot.vmp.service.bean.ErrorCallback;
@@ -32,6 +33,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.util.ObjectUtils;
@@ -40,8 +42,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service("abl")
@@ -63,6 +67,9 @@ public class ABLMediaNodeServerService implements IMediaNodeServerService {
 
     @Autowired
     private IInviteStreamService inviteStreamService;
+
+    @Value("${media.load-reconcile-timeout-sec:3}")
+    private int loadReconcileTimeoutSec = 3;
 
     @Override
     public boolean initStopSendRtp(MediaServer mediaInfo, String app, String stream, String ssrc) {
@@ -179,6 +186,34 @@ public class ABLMediaNodeServerService implements IMediaNodeServerService {
             }
         }
         return streamInfoList;
+    }
+
+    @Override
+    public MediaStreamCountResult countActiveStreams(MediaServer mediaServer) {
+        final ABLResult result;
+        try {
+            result = ablresTfulUtils.getMediaList(mediaServer, null, null, loadReconcileTimeoutSec);
+        } catch (RuntimeException e) {
+            log.warn("[ABL] 查询活跃流数量失败，节点：{}", mediaServer == null ? null : mediaServer.getId(), e);
+            return MediaStreamCountResult.failure(e.getMessage());
+        }
+        if (result == null) {
+            return MediaStreamCountResult.failure("ABL返回为空");
+        }
+        if (result.getCode() != 0) {
+            return MediaStreamCountResult.failure("ABL响应码：" + result.getCode());
+        }
+        if (result.getMediaList() == null || result.getMediaList().isEmpty()) {
+            return MediaStreamCountResult.success(0);
+        }
+        Set<String> streams = new HashSet<>();
+        for (ABLMedia media : result.getMediaList()) {
+            if (media == null || media.getStream() == null || media.getStream().isBlank()) {
+                continue;
+            }
+            streams.add((media.getApp() == null ? "" : media.getApp()) + '\u0000' + media.getStream());
+        }
+        return MediaStreamCountResult.success(streams.size());
     }
 
     @Override

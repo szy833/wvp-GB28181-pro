@@ -71,6 +71,12 @@ public class MediaConfig{
     @Value("${media.type:zlm}")
     private String type;
 
+    @Value("${media.load-reconcile-interval-ms:60000}")
+    private long loadReconcileIntervalMs = 60000L;
+
+    @Value("${media.load-reconcile-timeout-sec:3}")
+    private int loadReconcileTimeoutSec = 3;
+
 
     public String getSdpIp() {
         if (ObjectUtils.isEmpty(sdpIp)){

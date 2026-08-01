@@ -174,6 +174,10 @@ media:
     record-path: ./www/record
     # 录像保存时长
     record-day: 7
+    # 媒体节点负载对账周期，单位毫秒
+    load-reconcile-interval-ms: 60000
+    # 媒体节点负载查询超时时间，单位秒
+    load-reconcile-timeout-sec: 3
     # 启用多端口模式, 多端口模式使用端口区分每路流，兼容性更好。 单端口使用流的ssrc区分， 点播超时建议使用多端口测试
     rtp:
         # [可选] 是否启用多端口模式, 开启后会在portRange范围内选择端口用于媒体流传输

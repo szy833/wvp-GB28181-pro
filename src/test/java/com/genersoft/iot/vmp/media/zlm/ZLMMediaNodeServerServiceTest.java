@@ -1,8 +1,11 @@
 package com.genersoft.iot.vmp.media.zlm;
 
 import com.genersoft.iot.vmp.media.bean.MediaServer;
+import com.genersoft.iot.vmp.media.service.bean.MediaStreamCountResult;
 import com.genersoft.iot.vmp.media.zlm.dto.RtpServerResult;
 import com.genersoft.iot.vmp.media.zlm.dto.ZLMResult;
+import com.alibaba.fastjson2.JSONArray;
+import com.alibaba.fastjson2.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -10,6 +13,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -62,6 +66,44 @@ class ZLMMediaNodeServerServiceTest {
         when(utils.listRtpServer(mediaServer())).thenReturn(result);
 
         assertEquals(List.of("zlm-stream-1", "zlm-stream-2"), service.listRtpServer(mediaServer()));
+    }
+
+    @Test
+    void countActiveStreamsCountsUniqueRtspStreams() {
+        ZLMRESTfulUtils utils = mock(ZLMRESTfulUtils.class);
+        ZLMMediaNodeServerService service = service(utils);
+        JSONArray data = new JSONArray();
+        data.add(media("rtsp", "app", "stream-1"));
+        data.add(media("rtsp", "app", "stream-1"));
+        data.add(media("rtsp", "app", "stream-2"));
+        ZLMResult<JSONArray> result = new ZLMResult<>();
+        result.setCode(0);
+        result.setData(data);
+        when(utils.getMediaList(mediaServer(), null, null, "rtsp", null, 3)).thenReturn(result);
+
+        MediaStreamCountResult count = service.countActiveStreams(mediaServer());
+
+        assertTrue(count.isSuccess());
+        assertEquals(2, count.getCount());
+    }
+
+    @Test
+    void countActiveStreamsReturnsFailureForApiFailure() {
+        ZLMRESTfulUtils utils = mock(ZLMRESTfulUtils.class);
+        ZLMMediaNodeServerService service = service(utils);
+        when(utils.getMediaList(mediaServer(), null, null, "rtsp", null, 3)).thenReturn(null);
+
+        MediaStreamCountResult count = service.countActiveStreams(mediaServer());
+
+        assertTrue(count.isFailure());
+    }
+
+    private static JSONObject media(String schema, String app, String stream) {
+        JSONObject media = new JSONObject();
+        media.put("schema", schema);
+        media.put("app", app);
+        media.put("stream", stream);
+        return media;
     }
 
     private static ZLMMediaNodeServerService service(ZLMRESTfulUtils utils) {

@@ -7,6 +7,7 @@ import com.genersoft.iot.vmp.gb28181.bean.TalkRtpInfo;
 import com.genersoft.iot.vmp.media.bean.MediaInfo;
 import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.bean.RecordInfo;
+import com.genersoft.iot.vmp.media.service.bean.MediaStreamCountResult;
 import com.genersoft.iot.vmp.service.bean.DownloadFileInfo;
 import com.genersoft.iot.vmp.service.bean.ErrorCallback;
 import com.genersoft.iot.vmp.streamProxy.bean.StreamProxy;
@@ -43,6 +44,12 @@ public interface IMediaNodeServerService {
     boolean deleteRecordDirectory(MediaServer mediaServer, String app, String stream, String date, String fileName);
 
     List<StreamInfo> getMediaList(MediaServer mediaServer, String app, String stream, String callId);
+
+    /**
+     * Query the number of active business streams using the provider's native
+     * stream semantics.
+     */
+    MediaStreamCountResult countActiveStreams(MediaServer mediaServer);
 
     Boolean connectRtpServer(MediaServer mediaServer, String address, int port, String app, String stream);
 

@@ -42,22 +42,25 @@ public class ABLRESTfulUtils {
     }
 
     private OkHttpClient getClient(Integer readTimeOut){
-        if (client == null) {
-            if (readTimeOut == null) {
-                readTimeOut = 10;
-            }
-            OkHttpClient.Builder httpClientBuilder = new OkHttpClient.Builder();
-            //todo 暂时写死超时时间 均为5s
-            // 设置连接超时时间
-            httpClientBuilder.connectTimeout(8,TimeUnit.SECONDS);
-            // 设置读取超时时间
-            httpClientBuilder.readTimeout(readTimeOut,TimeUnit.SECONDS);
-            // 设置连接池
-            httpClientBuilder.connectionPool(new ConnectionPool(16, 5, TimeUnit.MINUTES));
-            client = httpClientBuilder.build();
+        boolean customTimeout = readTimeOut != null;
+        if (readTimeOut == null && client != null) {
+            return client;
         }
-        return client;
-
+        if (readTimeOut == null) {
+            readTimeOut = 10;
+        }
+        OkHttpClient.Builder httpClientBuilder = new OkHttpClient.Builder();
+        // 设置连接超时时间
+        httpClientBuilder.connectTimeout(customTimeout ? readTimeOut : 8,TimeUnit.SECONDS);
+        // 设置读取超时时间
+        httpClientBuilder.readTimeout(readTimeOut,TimeUnit.SECONDS);
+        // 设置连接池
+        httpClientBuilder.connectionPool(new ConnectionPool(16, 5, TimeUnit.MINUTES));
+        OkHttpClient result = httpClientBuilder.build();
+        if (readTimeOut == 10) {
+            client = result;
+        }
+        return result;
     }
 
     public String sendPost(MediaServer mediaServerItem, String api, Map<String, Object> param, RequestCallback callback) {
@@ -156,7 +159,11 @@ public class ABLRESTfulUtils {
     }
 
     public String sendGet(MediaServer mediaServerItem, String api, Map<String, Object> param) {
-        OkHttpClient client = getClient();
+        return sendGet(mediaServerItem, api, param, null);
+    }
+
+    public String sendGet(MediaServer mediaServerItem, String api, Map<String, Object> param, Integer readTimeOut) {
+        OkHttpClient client = getClient(readTimeOut);
 
         if (mediaServerItem == null) {
             return null;
@@ -384,13 +391,17 @@ public class ABLRESTfulUtils {
     }
 
     public ABLResult getMediaList(MediaServer mediaServer, String app, String stream) {
+        return getMediaList(mediaServer, app, stream, null);
+    }
+
+    public ABLResult getMediaList(MediaServer mediaServer, String app, String stream, Integer readTimeOut) {
         Map<String, Object> param =  new HashMap<>();
         param.put("app", app);
         if (stream != null) {
             param.put("stream", stream);
         }
 
-        String response = sendGet(mediaServer, "getMediaList", param);
+        String response = sendGet(mediaServer, "getMediaList", param, readTimeOut);
         ABLResult ablResult = JSON.parseObject(response, ABLResult.class);
         if (ablResult == null) {
             return ABLResult.getFailForMediaServer();

@@ -43,30 +43,32 @@ public class ZLMRESTfulUtils {
     }
 
     private OkHttpClient getClient(Integer readTimeOut){
-        if (client == null) {
-            if (readTimeOut == null) {
-                readTimeOut = 10;
-            }
-            OkHttpClient.Builder httpClientBuilder = new OkHttpClient.Builder();
-            //todo 暂时写死超时时间 均为5s
-            // 设置连接超时时间
-            httpClientBuilder.connectTimeout(8,TimeUnit.SECONDS);
-            // 设置读取超时时间
-            httpClientBuilder.readTimeout(readTimeOut,TimeUnit.SECONDS);
-            // 设置连接池
-            httpClientBuilder.connectionPool(new ConnectionPool(16, 5, TimeUnit.MINUTES));
-            if (log.isDebugEnabled()) {
-                HttpLoggingInterceptor logging = new HttpLoggingInterceptor(message -> {
-                    log.debug("http请求参数：" + message);
-                });
-                logging.setLevel(HttpLoggingInterceptor.Level.BASIC);
-                // OkHttp進行添加攔截器loggingInterceptor
-                httpClientBuilder.addInterceptor(logging);
-            }
-            client = httpClientBuilder.build();
+        boolean customTimeout = readTimeOut != null;
+        if (readTimeOut == null && client != null) {
+            return client;
         }
-        return client;
-
+        if (readTimeOut == null) {
+            readTimeOut = 10;
+        }
+        OkHttpClient.Builder httpClientBuilder = new OkHttpClient.Builder();
+        // 设置连接超时时间
+        httpClientBuilder.connectTimeout(customTimeout ? readTimeOut : 8,TimeUnit.SECONDS);
+        // 设置读取超时时间
+        httpClientBuilder.readTimeout(readTimeOut,TimeUnit.SECONDS);
+        // 设置连接池
+        httpClientBuilder.connectionPool(new ConnectionPool(16, 5, TimeUnit.MINUTES));
+        if (log.isDebugEnabled()) {
+            HttpLoggingInterceptor logging = new HttpLoggingInterceptor(message -> {
+                log.debug("http请求参数：" + message);
+            });
+            logging.setLevel(HttpLoggingInterceptor.Level.BASIC);
+            httpClientBuilder.addInterceptor(logging);
+        }
+        OkHttpClient result = httpClientBuilder.build();
+        if (readTimeOut == 10) {
+            client = result;
+        }
+        return result;
     }
 
     public String sendPost(MediaServer mediaServer, String api, Map<String, Object> param, RequestCallback callback) {
@@ -241,6 +243,11 @@ public class ZLMRESTfulUtils {
     }
 
     public ZLMResult<JSONArray> getMediaList(MediaServer mediaServer, String app, String stream, String schema, ResultCallback callback){
+        return getMediaList(mediaServer, app, stream, schema, callback, null);
+    }
+
+    public ZLMResult<JSONArray> getMediaList(MediaServer mediaServer, String app, String stream,
+                                             String schema, ResultCallback callback, Integer readTimeOut){
         Map<String, Object> param = new HashMap<>();
         if (app != null) {
             param.put("app",app);
@@ -272,7 +279,7 @@ public class ZLMRESTfulUtils {
             });
         }
 
-        String response = sendPost(mediaServer, "getMediaList",param, requestCallback);
+        String response = sendPost(mediaServer, "getMediaList",param, requestCallback, readTimeOut);
         if (response == null) {
             return ZLMResult.getFailForMediaServer();
         }else {
