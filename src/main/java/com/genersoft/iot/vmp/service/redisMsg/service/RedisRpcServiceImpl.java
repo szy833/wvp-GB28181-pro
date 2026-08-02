@@ -100,7 +100,7 @@ public class RedisRpcServiceImpl implements IRedisRpcService {
     public long waitePushStreamOnline(SendRtpInfo sendRtpItem, CommonCallback<Integer> callback) {
         log.info("[请求所有WVP监听流上线] {}/{}", sendRtpItem.getApp(), sendRtpItem.getStream());
         // 监听流上线。 流上线直接发送sendRtpItem消息给实际的信令处理者
-        Hook hook = Hook.getInstance(HookType.on_media_arrival, sendRtpItem.getApp(), sendRtpItem.getStream(), null);
+        Hook hook = Hook.getGlobalInstance(HookType.on_media_arrival, sendRtpItem.getApp(), sendRtpItem.getStream());
         RedisRpcRequest request = buildRequest("streamPush/waitePushStreamOnline", sendRtpItem);
         request.setToId(sendRtpItem.getServerId());
         hookSubscribe.addSubscribe(hook, (hookData) -> {
@@ -139,7 +139,7 @@ public class RedisRpcServiceImpl implements IRedisRpcService {
     @Override
     public void stopWaitePushStreamOnline(SendRtpInfo sendRtpItem) {
         log.info("[停止WVP监听流上线] {}/{}", sendRtpItem.getApp(), sendRtpItem.getStream());
-        Hook hook = Hook.getInstance(HookType.on_media_arrival, sendRtpItem.getApp(), sendRtpItem.getStream(), null);
+        Hook hook = Hook.getGlobalInstance(HookType.on_media_arrival, sendRtpItem.getApp(), sendRtpItem.getStream());
         hookSubscribe.removeSubscribe(hook);
         RedisRpcRequest request = buildRequest("streamPush/stopWaitePushStreamOnline", sendRtpItem);
         request.setToId(sendRtpItem.getServerId());
@@ -168,7 +168,7 @@ public class RedisRpcServiceImpl implements IRedisRpcService {
 
         log.info("[请求所有WVP监听流上线] {}/{}", app, stream);
         // 监听流上线。 流上线直接发送sendRtpItem消息给实际的信令处理者
-        Hook hook = Hook.getInstance(HookType.on_media_arrival, app, stream);
+        Hook hook = Hook.getGlobalInstance(HookType.on_media_arrival, app, stream);
         StreamInfo streamInfoParam = new StreamInfo();
         streamInfoParam.setApp(app);
         streamInfoParam.setStream(stream);

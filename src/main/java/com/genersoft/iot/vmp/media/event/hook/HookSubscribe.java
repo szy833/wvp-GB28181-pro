@@ -74,19 +74,15 @@ public class HookSubscribe {
 
     private void sendNotify(HookType hookType, MediaEvent event) {
         String mediaServerId = event.getMediaServer() == null ? null : event.getMediaServer().getId();
-        Hook paramHook = Hook.getInstance(hookType, event.getApp(), event.getStream(), mediaServerId);
-        Event hookSubscribeEvent = allSubscribes.get(paramHook.toString());
-        if (hookSubscribeEvent == null && event.getMediaServer() != null
-                && event.getMediaServer().getServerId() != null) {
-            // Some legacy integrations keyed hooks by the WVP server ID.
-            paramHook = Hook.getInstance(hookType, event.getApp(), event.getStream(),
-                    event.getMediaServer().getServerId());
-            hookSubscribeEvent = allSubscribes.get(paramHook.toString());
+        Event hookSubscribeEvent = null;
+        if (mediaServerId != null && !mediaServerId.isBlank()) {
+            Hook nodeHook = Hook.getInstance(hookType, event.getApp(), event.getStream(), mediaServerId);
+            hookSubscribeEvent = allSubscribes.get(nodeHook.toString());
         }
-        if (hookSubscribeEvent == null && mediaServerId != null) {
-            // Legacy subscriptions created before media-server-aware keys.
-            paramHook = Hook.getInstance(hookType, event.getApp(), event.getStream());
-            hookSubscribeEvent = allSubscribes.get(paramHook.toString());
+        if (hookSubscribeEvent == null) {
+            // A global subscription is explicit and is checked only after the node owner.
+            Hook globalHook = Hook.getGlobalInstance(hookType, event.getApp(), event.getStream());
+            hookSubscribeEvent = allSubscribes.get(globalHook.toString());
         }
         if (hookSubscribeEvent != null) {
             HookData data = HookData.getInstance(event);

@@ -80,6 +80,11 @@ public interface IInviteStreamService {
      */
     InviteInfo getInviteInfoByStream(InviteSessionType type, String stream);
 
+    /**
+     * Finds the InviteInfo owned by a specific media node and stream.
+     */
+    InviteInfo getInviteInfoByStreamAndMediaServer(String mediaServerId, String stream);
+
 
     /**
      * 添加一个invite回调

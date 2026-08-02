@@ -46,8 +46,10 @@ import javax.sip.SipException;
 import javax.sip.message.Response;
 import java.text.ParseException;
 import java.util.*;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static com.genersoft.iot.vmp.gb28181.utils.XmlUtil.getText;
@@ -93,7 +95,8 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
     private ISIPCommander commander;
 
     // 记录录像查询的结果等待
-    private final Map<String, SynchronousQueue<RecordInfo>> topicSubscribers = new ConcurrentHashMap<>();
+    // A buffered queue prevents an async end event from being lost before poll() starts.
+    private final Map<String, BlockingQueue<RecordInfo>> topicSubscribers = new ConcurrentHashMap<>();
 
     /**
      * 监听录像查询结束事件
@@ -101,9 +104,12 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
     @Async
     @EventListener
     public void onApplicationEvent(RecordInfoEndEvent event) {
-        SynchronousQueue<RecordInfo> queue = topicSubscribers.get("record" + event.getRecordInfo().getSn());
-        if (queue != null) {
-            queue.offer(event.getRecordInfo());
+        if (event == null || event.getRecordInfo() == null || event.getRecordInfo().getSn() == null) {
+            return;
+        }
+        BlockingQueue<RecordInfo> queue = topicSubscribers.get("record" + event.getRecordInfo().getSn());
+        if (queue != null && !queue.offer(event.getRecordInfo())) {
+            log.warn("[录像查询] 录像结束事件队列已满，忽略重复事件：sn={}", event.getRecordInfo().getSn());
         }
     }
 
@@ -580,14 +586,22 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
             redisRpcPlayService.queryRecordInfo(device.getServerId(), channel.getId(), startTime, endTime, callback);
             return;
         }
+        int sn;
+        String subscriberKey;
+        BlockingQueue<RecordInfo> queue;
+        do {
+            sn = ThreadLocalRandom.current().nextInt(100_000, 1_000_000);
+            subscriberKey = "record" + sn;
+            queue = new LinkedBlockingQueue<>(1);
+        } while (topicSubscribers.putIfAbsent(subscriberKey, queue) != null);
+        final int requestSn = sn;
+        final String requestKey = subscriberKey;
+        final BlockingQueue<RecordInfo> requestQueue = queue;
         try {
-            int sn  =  (int)((Math.random()*9+1)*100000);
-            commander.recordInfoQuery(device, channel.getDeviceId(), startTime, endTime, sn, null, null, eventResult -> {
+            commander.recordInfoQuery(device, channel.getDeviceId(), startTime, endTime, requestSn, null, null, eventResult -> {
                 try {
                     // 消息发送成功, 监听等待数据到来
-                    SynchronousQueue<RecordInfo> queue = new SynchronousQueue<>();
-                    topicSubscribers.put("record" + sn, queue);
-                    RecordInfo recordInfo = queue.poll(userSetting.getRecordInfoTimeout(), TimeUnit.MILLISECONDS);
+                    RecordInfo recordInfo = requestQueue.poll(userSetting.getRecordInfoTimeout(), TimeUnit.MILLISECONDS);
                     if (recordInfo != null) {
                         callback.run(ErrorCode.SUCCESS.getCode(), ErrorCode.SUCCESS.getMsg(), recordInfo);
                     }else {
@@ -596,13 +610,15 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
                 } catch (InterruptedException e) {
                     callback.run(ErrorCode.ERROR100.getCode(), e.getMessage(), null);
                 } finally {
-                    this.topicSubscribers.remove("record" + sn);
+                    this.topicSubscribers.remove(requestKey, requestQueue);
                 }
 
             }, (eventResult -> {
+                topicSubscribers.remove(requestKey, requestQueue);
                 callback.run(ErrorCode.ERROR100.getCode(), "查询录像失败, status: " +  eventResult.statusCode + ", message: " + eventResult.msg, null);
             }));
         } catch (InvalidArgumentException | SipException | ParseException e) {
+            topicSubscribers.remove(subscriberKey, queue);
             log.error("[命令发送失败] 查询录像: {}", e.getMessage());
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "命令发送失败: " +  e.getMessage());
         }

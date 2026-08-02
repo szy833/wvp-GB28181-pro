@@ -69,8 +69,10 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
     /**
      * 流离开的处理
      */
-    @Async
-    @EventListener
+    /**
+     * Kept as a reusable cleanup helper; media departure dispatch is owned by
+     * PlayServiceImpl so InviteInfo cannot be removed before BYE/session cleanup.
+     */
     public void onApplicationEvent(MediaDepartureEvent event) {
         if ("rtsp".equals(event.getSchema()) && MediaStreamUtil.isGB28181(event.getApp(), event.getStream())) {
             InviteInfo inviteInfo = getInviteInfoByStream(null, event.getStream());
@@ -604,6 +606,34 @@ public class InviteStreamServiceImpl implements IInviteStreamService {
     @Override
     public InviteInfo getInviteInfoByStream(InviteSessionType type, String stream) {
         return getInviteInfo(type, null, stream);
+    }
+
+    @Override
+    public InviteInfo getInviteInfoByStreamAndMediaServer(String mediaServerId, String stream) {
+        if (mediaServerId == null || stream == null) {
+            // A departure event without its node identity is ambiguous in a
+            // multi-node deployment; never fall back to another node's stream.
+            return null;
+        }
+        String indexKey = VideoManagerConstants.INVITE_INDEX_STREAM_PREFIX + stream;
+        Predicate<InviteInfo> matches = inviteInfo -> stream.equals(inviteInfo.getStream())
+                && mediaServerId.equals(inviteInfo.getMediaServerId());
+        try {
+            List<InviteInfo> indexed = findIndexedInvites(indexKey, matches);
+            if (!indexed.isEmpty() || inviteIndexesReady()) {
+                return indexed.isEmpty() ? null : indexed.get(0);
+            }
+        } catch (RuntimeException e) {
+            log.warn("[Redis-InviteInfo] 按媒体节点查询索引失败，回退主Hash：stream={}, mediaServerId={}",
+                    stream, mediaServerId, e);
+        }
+        PrimaryScanResult scanned = findInvitesByPrimaryScan(matches);
+        if (scanned.complete() && !scanned.invites().isEmpty()) {
+            InviteInfo result = scanned.invites().get(0);
+            refreshDerivedIndexes(result);
+            return result;
+        }
+        return null;
     }
 
     @Override

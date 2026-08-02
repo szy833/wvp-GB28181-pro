@@ -278,7 +278,9 @@ public class PlayServiceImpl implements IPlayService {
             }
         }else if (MediaStreamUtil.isGB28181(event.getApp(), event.getStream())) {
             // 释放ssrc
-            InviteInfo inviteInfo = inviteStreamService.getInviteInfoByStream(null, event.getStream());
+            String mediaServerId = event.getMediaServer() == null ? null : event.getMediaServer().getId();
+            InviteInfo inviteInfo = inviteStreamService.getInviteInfoByStreamAndMediaServer(
+                    mediaServerId, event.getStream());
             if (inviteInfo != null && inviteInfo.getStatus() == InviteSessionStatus.ok
                     && inviteInfo.getStreamInfo() != null && inviteInfo.getSsrcInfo() != null) {
                 // 发送bye

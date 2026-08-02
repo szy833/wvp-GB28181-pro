@@ -3,6 +3,7 @@ package com.genersoft.iot.vmp.gb28181.transmit.event.request;
 import com.genersoft.iot.vmp.gb28181.bean.Platform;
 import com.genersoft.iot.vmp.gb28181.transmit.SIPSender;
 import com.genersoft.iot.vmp.gb28181.utils.SipUtils;
+import com.genersoft.iot.vmp.gb28181.utils.XmlUtil;
 import com.genersoft.iot.vmp.utils.IpPortUtil;
 import com.google.common.primitives.Bytes;
 import gov.nist.javax.sip.message.SIPRequest;
@@ -198,6 +199,7 @@ public abstract class SIPRequestProcessorParent {
 		if (evt.getRequest().getContentLength().getContentLength() == 0
 				|| rawContent == null
 				|| rawContent.length == 0
+				|| rawContent.length > XmlUtil.MAX_XML_BYTES
 				|| ObjectUtils.isEmpty(new String(rawContent))) {
 			return null;
 		}
@@ -205,7 +207,7 @@ public abstract class SIPRequestProcessorParent {
 		if (charset == null) {
 			charset = "gb2312";
 		}
-		SAXReader reader = new SAXReader();
+		SAXReader reader = XmlUtil.createSecureReader();
 		reader.setEncoding(charset);
 		// 对海康出现的未转义字符做处理。
 		String[] destStrArray = new String[]{"&lt;","&gt;","&amp;","&apos;","&quot;"};
@@ -235,8 +237,7 @@ public abstract class SIPRequestProcessorParent {
 		try {
 			xml = reader.read(new ByteArrayInputStream(bytesResult));
 		}catch (DocumentException e) {
-			log.warn("[xml解析异常]： 原文如下： \r\n{}", new String(bytesResult));
-			log.warn("[xml解析异常]： 原文如下： 尝试兼容性处理");
+			log.warn("[xml解析异常]：内容解析失败，长度={}，尝试兼容性处理", bytesResult.length);
 			String[] xmlLineArray = new String(bytesResult).split("\\r?\\n");
 
 			// 兼容海康的address字段带有<破换xml结构导致无法解析xml的问题

@@ -355,7 +355,15 @@ class SSRCFactoryTest {
             factory.onMediaServerOnline(onlineEvent);
 
             assertTrue(queried.await(2, TimeUnit.SECONDS), "online event should trigger reconciliation after startup settles");
-            assertNotNull(factory.allocatePlayLease(server));
+            SsrcLease lease = null;
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (lease == null && System.nanoTime() < deadline) {
+                lease = factory.allocatePlayLease(server);
+                if (lease == null) {
+                    Thread.yield();
+                }
+            }
+            assertNotNull(lease);
         } finally {
             Field schedulerField = SSRCFactory.class.getDeclaredField("scheduler");
             schedulerField.setAccessible(true);

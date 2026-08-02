@@ -565,7 +565,7 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
         String buildApp = MediaStreamUtil.LOAD_MP4_APP;
         String buildStream = app + "_" + stream + "_" + fileName + "_" + RandomStringUtils.randomAlphabetic(6).toLowerCase();
 
-        Hook hook = Hook.getInstance(HookType.on_media_arrival, buildApp, buildStream, mediaServer.getServerId());
+        Hook hook = Hook.getInstance(HookType.on_media_arrival, buildApp, buildStream, mediaServer.getId());
         subscribe.addSubscribe(hook, (hookData) -> {
             StreamInfo streamInfo = getStreamInfoByAppAndStream(mediaServer, buildApp, buildStream, hookData.getMediaInfo(), null, null, true);
             if (callback != null) {
@@ -596,7 +596,7 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
             return;
         }
 
-        Hook hook = Hook.getInstance(HookType.on_media_arrival, buildApp, buildStream, mediaServer.getServerId());
+        Hook hook = Hook.getInstance(HookType.on_media_arrival, buildApp, buildStream, mediaServer.getId());
         subscribe.addSubscribe(hook, (hookData) -> {
             StreamInfo streamInfo = getStreamInfoByAppAndStream(mediaServer, buildApp, buildStream, hookData.getMediaInfo(), null, null, true);
             if (callback != null) {

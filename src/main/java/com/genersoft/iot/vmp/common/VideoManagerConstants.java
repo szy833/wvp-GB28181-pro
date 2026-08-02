@@ -51,6 +51,7 @@ public class VideoManagerConstants {
 	public static final String SIP_INVITE_SESSION_V2_META = "VMP_SIP_INVITE_SESSION_V2:META:";
 
 	public static final String MEDIA_STREAM_AUTHORITY = "VMP_MEDIA_STREAM_AUTHORITY";
+	public static final String MEDIA_STREAM_AUTHORITY_ENTRY_PREFIX = "VMP_MEDIA_STREAM_AUTHORITY_ENTRY:";
 
 	public static final String SIP_CSEQ_PREFIX = "VMP_SIP_CSEQ_";
 

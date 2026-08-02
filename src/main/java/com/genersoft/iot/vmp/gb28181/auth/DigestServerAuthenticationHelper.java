@@ -202,12 +202,9 @@ public class DigestServerAuthenticationHelper  {
 
         byte[] mdbytes = messageDigest.digest(A1.getBytes());
         String HA1 = toHexString(mdbytes);
-        log.debug("A1: {}", A1);
         log.debug("A2: {}", A2);
         mdbytes = messageDigest.digest(A2.getBytes());
         String HA2 = toHexString(mdbytes);
-        log.debug("HA1: {}", HA1);
-        log.debug("HA2: {}", HA2);
         // String cnonce = authHeader.getCNonce();
         log.debug("nonce: {}", nonce);
         log.debug("nc: {}", ncStr);

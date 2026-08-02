@@ -120,9 +120,10 @@ public class NotifyRequestForCatalogProcessor extends SIPRequestProcessorParent 
 						Element itemDevice = deviceListIterator.next();
 						CatalogChannelEvent catalogChannelEvent = null;
                         try {
-                            catalogChannelEvent = CatalogChannelEvent.decode(itemDevice);
+							catalogChannelEvent = CatalogChannelEvent.decode(itemDevice);
 							if (catalogChannelEvent.getChannel() == null) {
-								log.info("[解析CatalogChannelEvent]成功：但是解析通道信息失败， 原文如下： \n{}", new String(evt.getRequest().getRawContent()));
+								log.warn("[解析CatalogChannelEvent]成功但通道信息为空：deviceId={}, channelElement={}",
+										deviceId, itemDevice.getName());
 								continue;
 							}
 							catalogChannelEvent.getChannel().setDataDeviceId(device.getId());

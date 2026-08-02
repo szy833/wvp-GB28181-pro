@@ -11,6 +11,8 @@ import org.dom4j.Element;
 import org.dom4j.io.SAXReader;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.ReflectionUtils;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
 import javax.sip.RequestEvent;
 import javax.sip.message.Request;
@@ -28,14 +30,41 @@ import java.util.*;
 @Slf4j
 public class XmlUtil {
 
+    /** Maximum SIP XML payload accepted before DOM construction. */
+    public static final int MAX_XML_BYTES = 1024 * 1024;
+
+    /**
+     * Creates a parser that cannot resolve external entities or DTDs.
+     * All device-provided XML must use this factory.
+     */
+    public static SAXReader createSecureReader() {
+        SAXReader reader = new SAXReader();
+        try {
+            reader.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            reader.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            reader.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            reader.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        } catch (SAXException e) {
+            throw new IllegalStateException("XML安全特性配置失败", e);
+        }
+        reader.setValidation(false);
+        reader.setIncludeInternalDTDDeclarations(false);
+        reader.setIncludeExternalDTDDeclarations(false);
+        reader.setEntityResolver((publicId, systemId) -> new InputSource(new StringReader("")));
+        return reader;
+    }
+
     /**
      * 解析XML为Document对象
      */
     public static Element parseXml(String xml) {
+        if (xml == null || xml.length() > MAX_XML_BYTES) {
+            log.warn("解析XML失败：内容为空或超过最大长度限制，length={}", xml == null ? 0 : xml.length());
+            return null;
+        }
         Document document = null;
-        //
         StringReader sr = new StringReader(xml);
-        SAXReader saxReader = new SAXReader();
+        SAXReader saxReader = createSecureReader();
         try {
             document = saxReader.read(sr);
         } catch (DocumentException e) {
@@ -210,10 +239,13 @@ public class XmlUtil {
     }
 
     public static Element getRootElement(byte[] content, String charset) throws DocumentException {
+        if (content == null || content.length == 0 || content.length > MAX_XML_BYTES) {
+            throw new DocumentException("XML内容为空或超过最大长度限制");
+        }
         if (charset == null) {
             charset = "gb2312";
         }
-        SAXReader reader = new SAXReader();
+        SAXReader reader = createSecureReader();
         reader.setEncoding(charset);
         Document xml = reader.read(new ByteArrayInputStream(content));
         return xml.getRootElement();

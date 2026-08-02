@@ -26,6 +26,8 @@ import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -35,6 +37,11 @@ import java.util.*;
 @Component
 @RequiredArgsConstructor
 public class RedisCatchStorageImpl implements IRedisCatchStorage {
+
+    private static final Duration STREAM_METADATA_TTL = Duration.ofHours(24);
+    private static final Duration STREAM_AUTHORITY_TTL = Duration.ofHours(1);
+    private static final Duration PUSH_CACHE_TTL = Duration.ofHours(1);
+    private static final int DEVICE_KEY_DELETE_BATCH_SIZE = 500;
 
     @Autowired
     private final DeviceMapper deviceMapper;
@@ -104,7 +111,7 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
         if (streamAuthorityInfo != null) {
             mediaInfo.setCallId(streamAuthorityInfo.getCallId());
         }
-        redisTemplate.opsForValue().set(key, JSON.toJSONString(mediaInfo));
+        redisTemplate.opsForValue().set(key, JSON.toJSONString(mediaInfo), STREAM_METADATA_TTL);
     }
 
     @Override
@@ -153,15 +160,55 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
     @Override
     public void removeAllDevice() {
         String key = VideoManagerConstants.DEVICE_PREFIX;
-        redisTemplate.delete(key);
-        // 同时删除所有注册时间和心跳时间缓存列表
-        Set<String> registerKeys = stringRedisTemplate.keys(VideoManagerConstants.DEVICE_REGISTER_PREFIX + "*");
-        if (registerKeys != null && !registerKeys.isEmpty()) {
-            stringRedisTemplate.delete(registerKeys);
+        List<String> deviceIds = new ArrayList<>(DEVICE_KEY_DELETE_BATCH_SIZE);
+        try (Cursor<Map.Entry<Object, Object>> cursor = redisTemplate.opsForHash().scan(key,
+                ScanOptions.scanOptions().count(DEVICE_KEY_DELETE_BATCH_SIZE).build())) {
+            while (cursor.hasNext()) {
+                Map.Entry<Object, Object> entry = cursor.next();
+                Object field = entry == null ? null : entry.getKey();
+                if (field != null) {
+                    deviceIds.add(String.valueOf(field));
+                    if (deviceIds.size() >= DEVICE_KEY_DELETE_BATCH_SIZE) {
+                        deleteDeviceAuxiliaryKeys(deviceIds);
+                        deviceIds.clear();
+                    }
+                }
+            }
         }
-        Set<String> keepaliveKeys = stringRedisTemplate.keys(VideoManagerConstants.DEVICE_KEEPALIVE_PREFIX + "*");
-        if (keepaliveKeys != null && !keepaliveKeys.isEmpty()) {
-            stringRedisTemplate.delete(keepaliveKeys);
+        deleteDeviceAuxiliaryKeys(deviceIds);
+        redisTemplate.delete(key);
+
+        // Remove orphaned auxiliary keys without blocking Redis with KEYS.
+        scanAndDeleteKeys(VideoManagerConstants.DEVICE_REGISTER_PREFIX + "*");
+        scanAndDeleteKeys(VideoManagerConstants.DEVICE_KEEPALIVE_PREFIX + "*");
+    }
+
+    private void deleteDeviceAuxiliaryKeys(List<String> deviceIds) {
+        if (deviceIds == null || deviceIds.isEmpty()) {
+            return;
+        }
+        List<String> keys = new ArrayList<>(deviceIds.size() * 2);
+        for (String deviceId : deviceIds) {
+            keys.add(VideoManagerConstants.DEVICE_REGISTER_PREFIX + deviceId);
+            keys.add(VideoManagerConstants.DEVICE_KEEPALIVE_PREFIX + deviceId);
+        }
+        longRedisTemplate.delete(keys);
+    }
+
+    private void scanAndDeleteKeys(String pattern) {
+        List<String> batch = new ArrayList<>(DEVICE_KEY_DELETE_BATCH_SIZE);
+        try (Cursor<String> cursor = stringRedisTemplate.scan(
+                ScanOptions.scanOptions().match(pattern).count(DEVICE_KEY_DELETE_BATCH_SIZE).build())) {
+            while (cursor.hasNext()) {
+                batch.add(cursor.next());
+                if (batch.size() >= DEVICE_KEY_DELETE_BATCH_SIZE) {
+                    stringRedisTemplate.delete(batch);
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) {
+                stringRedisTemplate.delete(batch);
+            }
         }
     }
 
@@ -241,35 +288,57 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
 
     @Override
     public void updateStreamAuthorityInfo(String app, String stream, StreamAuthorityInfo streamAuthorityInfo) {
-        String key = VideoManagerConstants.MEDIA_STREAM_AUTHORITY;
-        String objectKey = app+ "_" + stream;
-        redisTemplate.opsForHash().put(key, objectKey, streamAuthorityInfo);
+        redisTemplate.opsForValue().set(streamAuthorityEntryKey(app, stream),
+                streamAuthorityInfo, STREAM_AUTHORITY_TTL);
     }
 
     @Override
     public void removeStreamAuthorityInfo(String app, String stream) {
-        String key = VideoManagerConstants.MEDIA_STREAM_AUTHORITY;
-        String objectKey = app+ "_" + stream;
-        redisTemplate.opsForHash().delete(key, objectKey);
+        redisTemplate.delete(streamAuthorityEntryKey(app, stream));
+        // Remove records written by versions that used the shared hash.
+        redisTemplate.opsForHash().delete(VideoManagerConstants.MEDIA_STREAM_AUTHORITY, app + "_" + stream);
     }
 
     @Override
     public StreamAuthorityInfo getStreamAuthorityInfo(String app, String stream) {
-        String key = VideoManagerConstants.MEDIA_STREAM_AUTHORITY;
-        String objectKey = app+ "_" + stream;
-        return (StreamAuthorityInfo)redisTemplate.opsForHash().get(key, objectKey);
+        StreamAuthorityInfo current = (StreamAuthorityInfo) redisTemplate.opsForValue()
+                .get(streamAuthorityEntryKey(app, stream));
+        if (current != null) {
+            return current;
+        }
+        return (StreamAuthorityInfo) redisTemplate.opsForHash()
+                .get(VideoManagerConstants.MEDIA_STREAM_AUTHORITY, app + "_" + stream);
 
     }
 
     @Override
     public List<StreamAuthorityInfo> getAllStreamAuthorityInfo() {
-        String key = VideoManagerConstants.MEDIA_STREAM_AUTHORITY;
         List<StreamAuthorityInfo> result = new ArrayList<>();
-        List<Object> values = redisTemplate.opsForHash().values(key);
-        for (Object value : values) {
-            result.add((StreamAuthorityInfo)value);
+        String pattern = VideoManagerConstants.MEDIA_STREAM_AUTHORITY_ENTRY_PREFIX
+                + userSetting.getServerId() + ":*";
+        try (Cursor<String> cursor = redisTemplate.scan(
+                ScanOptions.scanOptions().match(pattern).count(100).build())) {
+            while (cursor.hasNext()) {
+                Object value = redisTemplate.opsForValue().get(cursor.next());
+                if (value instanceof StreamAuthorityInfo authorityInfo) {
+                    result.add(authorityInfo);
+                }
+            }
+        }
+        // Keep visibility of legacy records during the migration window.
+        List<Object> legacyValues = redisTemplate.opsForHash()
+                .values(VideoManagerConstants.MEDIA_STREAM_AUTHORITY);
+        for (Object value : legacyValues) {
+            if (value instanceof StreamAuthorityInfo authorityInfo) {
+                result.add(authorityInfo);
+            }
         }
         return result;
+    }
+
+    private String streamAuthorityEntryKey(String app, String stream) {
+        return VideoManagerConstants.MEDIA_STREAM_AUTHORITY_ENTRY_PREFIX
+                + userSetting.getServerId() + ":" + app + ":" + stream;
     }
 
 
@@ -489,7 +558,7 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
     @Override
     public void addPushListItem(String app, String stream, MediaInfo mediaInfo) {
         String key = VideoManagerConstants.PUSH_STREAM_LIST + app + "_" + stream;
-        redisTemplate.opsForValue().set(key, mediaInfo);
+        redisTemplate.opsForValue().set(key, mediaInfo, PUSH_CACHE_TTL);
     }
 
     @Override
@@ -517,7 +586,8 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
     @Override
     public void addWaiteSendRtpItem(SendRtpInfo sendRtpItem, int platformPlayTimeout) {
         String key = VideoManagerConstants.WAITE_SEND_PUSH_STREAM + sendRtpItem.getApp() + "_" + sendRtpItem.getStream();
-        redisTemplate.opsForValue().set(key, sendRtpItem);
+        long ttlMillis = Math.max(platformPlayTimeout, 1_000L) + 5_000L;
+        redisTemplate.opsForValue().set(key, sendRtpItem, Duration.ofMillis(ttlMillis));
     }
 
     @Override
