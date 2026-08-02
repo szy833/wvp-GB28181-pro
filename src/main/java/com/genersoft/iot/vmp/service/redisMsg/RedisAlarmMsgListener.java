@@ -2,6 +2,9 @@ package com.genersoft.iot.vmp.service.redisMsg;
 
 import com.alibaba.fastjson2.JSON;
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.common.VideoManagerConstants;
+import com.genersoft.iot.vmp.conf.redis.RedisStreamConsumer;
+import com.genersoft.iot.vmp.conf.redis.RedisStreamMessageService;
 import com.genersoft.iot.vmp.gb28181.bean.AlarmChannelMessage;
 import com.genersoft.iot.vmp.gb28181.bean.Device;
 import com.genersoft.iot.vmp.gb28181.bean.DeviceAlarmNotify;
@@ -19,16 +22,16 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
-import org.springframework.scheduling.annotation.Scheduled;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ObjectUtils;
 
 import javax.sip.InvalidArgumentException;
 import javax.sip.SipException;
 import java.text.ParseException;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import org.springframework.data.redis.connection.stream.MapRecord;
 
 /**
  * 监听 SUBSCRIBE alarm_receive
@@ -59,39 +62,49 @@ public class RedisAlarmMsgListener implements MessageListener {
     @Autowired
     private IPlatformChannelService platformChannelService;
 
-    private final ConcurrentLinkedQueue<Message> taskQueue = new ConcurrentLinkedQueue<>();
-
     @Autowired
     private UserSetting userSetting;
+
+    @Autowired
+    private RedisStreamConsumer streamConsumer;
+
+    private static final String STREAM_GROUP = VideoManagerConstants.WVP_REDIS_STREAM_GROUP;
+    private final String consumerName = "alarm-" + java.util.UUID.randomUUID();
+
+    @PostConstruct
+    public void startStreamConsumer() {
+        streamConsumer.start(VideoManagerConstants.WVP_REDIS_STREAM_ALARM_PREFIX, STREAM_GROUP,
+                consumerName, this::handleRecord);
+    }
+
+    @PreDestroy
+    public void stopStreamConsumer() {
+        streamConsumer.stop(VideoManagerConstants.WVP_REDIS_STREAM_ALARM_PREFIX, STREAM_GROUP, consumerName);
+    }
 
     @Override
     public void onMessage(@NotNull Message message, byte[] bytes) {
         log.info("[REDIS: ALARM]： {}", new String(message.getBody()));
-        taskQueue.offer(message);
+        try {
+            streamConsumerMessageService().append(VideoManagerConstants.WVP_REDIS_STREAM_ALARM_PREFIX,
+                    new String(message.getBody()), "pubsub");
+        } catch (Exception e) {
+            log.error("[REDIS的ALARM通知] 写入Stream失败，消息将由上游重试：{}", e.getMessage(), e);
+        }
     }
 
-    @Scheduled(fixedDelay = 100)
-    public void executeTaskQueue() {
-        if (taskQueue.isEmpty()) {
-            return;
+    public boolean handleRecord(MapRecord<String, String, String> record) {
+        String body = record.getValue().get("body");
+        if (body == null) {
+            log.warn("[REDIS的ALARM通知] Stream消息缺少body字段，id={}", record.getId());
+            return true;
         }
-        List<Message> messageDataList = new ArrayList<>();
-        int size = taskQueue.size();
-        for (int i = 0; i < size; i++) {
-            Message msg = taskQueue.poll();
-            if (msg != null) {
-                messageDataList.add(msg);
-            }
-        }
-        if (messageDataList.isEmpty()) {
-            return;
-        }
-        for (Message msg : messageDataList) {
-            try {
-                AlarmChannelMessage alarmChannelMessage = JSON.parseObject(msg.getBody(), AlarmChannelMessage.class);
+        try {
+                boolean success = true;
+                AlarmChannelMessage alarmChannelMessage = JSON.parseObject(body, AlarmChannelMessage.class);
                 if (alarmChannelMessage == null) {
                     log.warn("[REDIS的ALARM通知]消息解析失败");
-                    continue;
+                    return false;
                 }
                 String chanelId = alarmChannelMessage.getGbId();
 
@@ -117,6 +130,7 @@ public class RedisAlarmMsgListener implements MessageListener {
                                     commanderForPlatform.sendAlarmMessage(parentPlatform, deviceAlarm);
                                 } catch (SipException | InvalidArgumentException | ParseException e) {
                                     log.error("[命令发送失败] 国标级联 发送报警: {}", e.getMessage());
+                                    success = false;
                                 }
                             }
                         }
@@ -130,6 +144,7 @@ public class RedisAlarmMsgListener implements MessageListener {
                                     commanderForPlatform.sendAlarmMessage(parentPlatform, deviceAlarm);
                                 } catch (SipException | InvalidArgumentException | ParseException e) {
                                     log.error("[命令发送失败] 国标级联 发送报警: {}", e.getMessage());
+                                    success = false;
                                 }
                             }
                         }
@@ -143,6 +158,7 @@ public class RedisAlarmMsgListener implements MessageListener {
                                 commander.sendAlarmMessage(device, deviceAlarm);
                             } catch (InvalidArgumentException | SipException | ParseException e) {
                                 log.error("[命令发送失败] 发送报警: {}", e.getMessage());
+                                success = false;
                             }
                         }
                     }
@@ -155,6 +171,7 @@ public class RedisAlarmMsgListener implements MessageListener {
                             commander.sendAlarmMessage(device, deviceAlarm);
                         } catch (InvalidArgumentException | SipException | ParseException e) {
                             log.error("[命令发送失败] 发送报警: {}", e.getMessage());
+                            success = false;
                         }
                     } else if (device == null && (platforms != null && !platforms.isEmpty() )) {
                         for (Platform platform : platforms) {
@@ -163,6 +180,7 @@ public class RedisAlarmMsgListener implements MessageListener {
                                     commanderForPlatform.sendAlarmMessage(platform, deviceAlarm);
                                 } catch (InvalidArgumentException | SipException | ParseException e) {
                                     log.error("[命令发送失败] 发送报警: {}", e.getMessage());
+                                    success = false;
                                 }
                             }
                         }
@@ -170,11 +188,19 @@ public class RedisAlarmMsgListener implements MessageListener {
                         log.warn("[REDIS的ALARM通知] 未查询到" + chanelId + "所属的平台或设备");
                     }
                 }
+                return success;
             } catch (Exception e) {
                 log.error("未处理的异常 ", e);
                 log.warn("[REDIS的ALARM通知] 发现未处理的异常, {}", e.getMessage());
+                return false;
             }
-        }
+    }
+
+    @Autowired
+    private RedisStreamMessageService redisStreamMessageService;
+
+    private RedisStreamMessageService streamConsumerMessageService() {
+        return redisStreamMessageService;
     }
 }
 

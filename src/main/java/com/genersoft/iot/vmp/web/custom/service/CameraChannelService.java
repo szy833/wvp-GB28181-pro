@@ -4,6 +4,9 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.genersoft.iot.vmp.conf.DynamicTask;
 import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.conf.redis.RedisStreamConfig;
+import com.genersoft.iot.vmp.conf.redis.RedisStreamMessageService;
+import com.genersoft.iot.vmp.common.VideoManagerConstants;
 import com.genersoft.iot.vmp.conf.exception.ControllerException;
 import com.genersoft.iot.vmp.gb28181.bean.CommonGBChannel;
 import com.genersoft.iot.vmp.gb28181.bean.FrontEndControlCodeForPTZ;
@@ -58,6 +61,12 @@ public class CameraChannelService implements CommandLineRunner {
 
     @Autowired
     private RedisTemplate<String, String> redisTemplateForString;
+
+    @Autowired
+    private RedisStreamMessageService redisStreamMessageService;
+
+    @Autowired
+    private RedisStreamConfig redisStreamConfig;
 
     @Autowired
     private IGbChannelPlayService channelPlayService;
@@ -351,8 +360,15 @@ public class CameraChannelService implements CommandLineRunner {
                     jsonObject.put("speed", mobilePosition.getSpeed());
                     jsonObject.put("blockId", member.getBlockId());
                     jsonObject.put("gbDeviceId", mobilePosition.getChannelDeviceId());
+                    jsonObject.put("id", mobilePosition.getChannelDeviceId());
                     log.info("[SY-redis发送通知-移动设备位置信息] 发送 {}: {}", REDIS_GPS_MESSAGE, jsonObject.toString());
-                    redisTemplateForString.convertAndSend(REDIS_GPS_MESSAGE, jsonObject.toString());
+                    String gpsBody = jsonObject.toString();
+                    if (redisStreamConfig.isPubSubCompatibility()) {
+                        redisTemplateForString.convertAndSend(REDIS_GPS_MESSAGE, gpsBody);
+                    } else {
+                        redisStreamMessageService.append(VideoManagerConstants.WVP_REDIS_STREAM_GPS_PREFIX,
+                                gpsBody, "camera-channel");
+                    }
                 });
             }
         }

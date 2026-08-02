@@ -207,18 +207,25 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
 
     @Override
     public void updateGpsMsgInfo(GPSMsgInfo gpsMsgInfo) {
-        String key = VideoManagerConstants.WVP_STREAM_GPS_MSG_PREFIX + userSetting.getServerId();
-        Duration duration = Duration.ofSeconds(60L);
-        gpsMsgInfo.setStored(false);
-        redisTemplate.opsForHash().put(key, gpsMsgInfo.getId(),gpsMsgInfo);
-        redisTemplate.expire(key, duration);
-        // 默认GPS消息保存1分钟
+        if (gpsMsgInfo == null || gpsMsgInfo.getId() == null) {
+            return;
+        }
+        String key = VideoManagerConstants.WVP_STREAM_GPS_MSG_LATEST_PREFIX
+                + userSetting.getServerId() + ":" + gpsMsgInfo.getId();
+        redisTemplate.opsForValue().set(key, gpsMsgInfo, Duration.ofSeconds(60L));
     }
 
     @Override
     public GPSMsgInfo getGpsMsgInfo(String channelId) {
-        String key = VideoManagerConstants.WVP_STREAM_GPS_MSG_PREFIX + userSetting.getServerId();
-        return (GPSMsgInfo) redisTemplate.opsForHash().get(key, channelId);
+        String latestKey = VideoManagerConstants.WVP_STREAM_GPS_MSG_LATEST_PREFIX
+                + userSetting.getServerId() + ":" + channelId;
+        GPSMsgInfo latest = (GPSMsgInfo) redisTemplate.opsForValue().get(latestKey);
+        if (latest != null) {
+            return latest;
+        }
+        // Read-only fallback for values written before the per-channel key migration.
+        String legacyKey = VideoManagerConstants.WVP_STREAM_GPS_MSG_PREFIX + userSetting.getServerId();
+        return (GPSMsgInfo) redisTemplate.opsForHash().get(legacyKey, channelId);
     }
 
     @Override

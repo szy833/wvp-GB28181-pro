@@ -12,7 +12,7 @@ public class RedisStreamConfig {
 
     private boolean enabled = true;
     /** Keep publishing Pub/Sub while external producers are migrated. */
-    private boolean pubSubCompatibility = true;
+    private boolean pubSubCompatibility = false;
     private int batchSize = 100;
     private long blockMillis = 1000L;
     private long claimIdleSeconds = 30L;
