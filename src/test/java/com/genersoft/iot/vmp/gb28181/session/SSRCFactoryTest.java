@@ -2,6 +2,7 @@ package com.genersoft.iot.vmp.gb28181.session;
 
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,7 @@ import static org.mockito.Mockito.*;
 class SSRCFactoryTest {
 
     private SSRCFactory ssrcFactory;
+    private final List<SsrcLease> testLeases = new ArrayList<>();
 
     private static final String DOMAIN_PART = "20000";
     private static final String SERVER_ID = "test-server";
@@ -45,9 +47,15 @@ class SSRCFactoryTest {
         ssrcFactory.markReconciliationReady(rtpServer(SERVER_ID), new ArrayList<>());
     }
 
+    @AfterEach
+    void tearDown() {
+        testLeases.forEach(ssrcFactory::release);
+        testLeases.clear();
+    }
+
     @Test
-    void getPlaySsrc_shouldReturnCorrectFormat() {
-        String ssrc = ssrcFactory.getPlaySsrc(SERVER_ID);
+    void allocatePlayLease_shouldReturnCorrectFormat() {
+        String ssrc = allocatePlaySsrc(SERVER_ID);
         assertNotNull(ssrc);
         assertEquals(10, ssrc.length(), "SSRC should be 10 characters: prefix(1) + domain(5) + seq(4)");
         assertTrue(ssrc.startsWith("0"), "Play SSRC should start with '0'");
@@ -56,8 +64,8 @@ class SSRCFactoryTest {
     }
 
     @Test
-    void getPlayBackSsrc_shouldReturnCorrectFormat() {
-        String ssrc = ssrcFactory.getPlayBackSsrc(SERVER_ID);
+    void allocatePlaybackLease_shouldReturnCorrectFormat() {
+        String ssrc = allocatePlaybackSsrc(SERVER_ID);
         assertNotNull(ssrc);
         assertEquals(10, ssrc.length(), "SSRC should be 10 characters: prefix(1) + domain(5) + seq(4)");
         assertTrue(ssrc.startsWith("1"), "PlayBack SSRC should start with '1'");
@@ -66,10 +74,19 @@ class SSRCFactoryTest {
     }
 
     @Test
+    void stringAllocationApis_shouldNotExist() {
+        String playMethod = "getPlay" + "Ssrc";
+        String playbackMethod = "getPlayBack" + "Ssrc";
+        assertTrue(java.util.Arrays.stream(SSRCFactory.class.getDeclaredMethods())
+                .noneMatch(method -> method.getName().equals(playMethod)
+                        || method.getName().equals(playbackMethod)));
+    }
+
+    @Test
     void allocations_withinSameServer_shouldBeUnique() {
         Set<String> allocated = new HashSet<>();
         for (int i = 0; i < 1000; i++) {
-            String ssrc = ssrcFactory.getPlaySsrc(SERVER_ID);
+            String ssrc = allocatePlaySsrc(SERVER_ID);
             assertNotNull(ssrc, "Should allocate SSRC #" + i);
             assertTrue(allocated.add(ssrc), "SSRC should be unique: " + ssrc);
         }
@@ -84,34 +101,34 @@ class SSRCFactoryTest {
         ssrcFactory.markReconciliationReady(rtpServer(serverB), new ArrayList<>());
 
         for (int i = 0; i < 10000; i++) {
-            assertNotNull(ssrcFactory.getPlaySsrc(serverA), "Server A should allocate SSRC #" + i);
+            assertNotNull(allocatePlaySsrc(serverA), "Server A should allocate SSRC #" + i);
         }
-        assertNull(ssrcFactory.getPlaySsrc(serverA), "Server A should be exhausted");
+        assertNull(allocatePlaySsrc(serverA), "Server A should be exhausted");
 
         for (int i = 0; i < 1000; i++) {
-            assertNotNull(ssrcFactory.getPlaySsrc(serverB), "Server B should allocate SSRC #" + i);
+            assertNotNull(allocatePlaySsrc(serverB), "Server B should allocate SSRC #" + i);
         }
     }
 
     @Test
     void exhaustion_shouldReturnNull() {
         for (int i = 0; i < 10000; i++) {
-            assertNotNull(ssrcFactory.getPlaySsrc(SERVER_ID), "iteration " + i);
+            assertNotNull(allocatePlaySsrc(SERVER_ID), "iteration " + i);
         }
-        assertNull(ssrcFactory.getPlaySsrc(SERVER_ID), "Should return null when exhausted");
-        assertNull(ssrcFactory.getPlayBackSsrc(SERVER_ID), "Should return null for PlayBack too");
+        assertNull(allocatePlaySsrc(SERVER_ID), "Should return null when exhausted");
+        assertNull(allocatePlaybackSsrc(SERVER_ID), "Should return null for PlayBack too");
     }
 
     @Test
     @Disabled("Needs mocked mediaServerService for ZLM query")
     void rebuild_shouldResetUsage() {
         for (int i = 0; i < 500; i++) {
-            ssrcFactory.getPlaySsrc(SERVER_ID);
+            allocatePlaySsrc(SERVER_ID);
         }
         ssrcFactory.rebuild();
 
         for (int i = 0; i < 500; i++) {
-            String ssrc = ssrcFactory.getPlaySsrc(SERVER_ID);
+            String ssrc = allocatePlaySsrc(SERVER_ID);
             assertNotNull(ssrc, "After rebuild should allocate SSRC #" + i);
         }
     }
@@ -120,7 +137,7 @@ class SSRCFactoryTest {
     void allocateAll_shouldUseAll10000Slots() {
         Set<String> allocated = new HashSet<>();
         for (int i = 0; i < 10000; i++) {
-            String ssrc = ssrcFactory.getPlaySsrc(SERVER_ID);
+            String ssrc = allocatePlaySsrc(SERVER_ID);
             assertNotNull(ssrc, "Should allocate at iteration " + i);
             allocated.add(ssrc);
         }
@@ -130,8 +147,8 @@ class SSRCFactoryTest {
     @Test
     void twoPrefixes_shareSamePool() throws Exception {
         for (int i = 0; i < 5000; i++) {
-            assertNotNull(ssrcFactory.getPlaySsrc(SERVER_ID), "play #" + i);
-            assertNotNull(ssrcFactory.getPlayBackSsrc(SERVER_ID), "playback #" + i);
+            assertNotNull(allocatePlaySsrc(SERVER_ID), "play #" + i);
+            assertNotNull(allocatePlaybackSsrc(SERVER_ID), "playback #" + i);
         }
 
         Field usedMapField = SSRCFactory.class.getDeclaredField("usedMap");
@@ -153,18 +170,18 @@ class SSRCFactoryTest {
         ssrcFactory.markReconciliationReady(rtpServer(server3), new ArrayList<>());
 
         for (int i = 0; i < 10000; i++) {
-            ssrcFactory.getPlaySsrc(server1);
+            allocatePlaySsrc(server1);
         }
-        assertNull(ssrcFactory.getPlaySsrc(server1));
+        assertNull(allocatePlaySsrc(server1));
 
-        assertNotNull(ssrcFactory.getPlaySsrc(server2));
-        assertNotNull(ssrcFactory.getPlaySsrc(server3));
+        assertNotNull(allocatePlaySsrc(server2));
+        assertNotNull(allocatePlaySsrc(server3));
 
         for (int i = 0; i < 100; i++) {
-            ssrcFactory.getPlaySsrc(server2);
-            ssrcFactory.getPlaySsrc(server3);
+            allocatePlaySsrc(server2);
+            allocatePlaySsrc(server3);
         }
-        assertNull(ssrcFactory.getPlaySsrc(server1));
+        assertNull(allocatePlaySsrc(server1));
     }
 
     @Test
@@ -179,7 +196,7 @@ class SSRCFactoryTest {
         }
         usedMap.put(SERVER_ID, bits);
 
-        String ssrc = ssrcFactory.getPlaySsrc(SERVER_ID);
+        String ssrc = allocatePlaySsrc(SERVER_ID);
         assertNotNull(ssrc, "Should find a free slot via linear probe");
         int suffix = Integer.parseInt(ssrc.substring(6));
         assertTrue(suffix >= 100, "Should skip used slots 0-99, got suffix " + suffix);
@@ -189,7 +206,7 @@ class SSRCFactoryTest {
     void ssrc_shouldBeDifferentEachCall() {
         Set<String> results = new HashSet<>();
         for (int i = 0; i < 100; i++) {
-            results.add(ssrcFactory.getPlaySsrc(SERVER_ID));
+            results.add(allocatePlaySsrc(SERVER_ID));
         }
         assertEquals(100, results.size(), "All 100 calls should return different SSRCs");
     }
@@ -364,6 +381,24 @@ class SSRCFactoryTest {
         ReflectionTestUtils.setField(ssrcFactory, "userSetting", settings);
         ssrcFactory.markReconciliationReady(server, new ArrayList<>());
         return server;
+    }
+
+    private String allocatePlaySsrc(String serverId) {
+        SsrcLease lease = ssrcFactory.allocatePlayLease(serverId);
+        if (lease != null) {
+            testLeases.add(lease);
+            return lease.getSsrc();
+        }
+        return null;
+    }
+
+    private String allocatePlaybackSsrc(String serverId) {
+        SsrcLease lease = ssrcFactory.allocatePlaybackLease(serverId);
+        if (lease != null) {
+            testLeases.add(lease);
+            return lease.getSsrc();
+        }
+        return null;
     }
 
     private MediaServer rtpServer(String id) {
