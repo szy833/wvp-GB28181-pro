@@ -85,32 +85,6 @@ public class SSRCFactory {
         }
     }
 
-    /**
-     * Legacy string-only allocation. New lifecycle-managed callers must use
-     * {@link #allocatePlayLease(String)} so the owner can be released.
-     */
-    @Deprecated
-    public String getPlaySsrc(String mediaServerId) {
-        if (!allocationReady(mediaServerId)) {
-            return null;
-        }
-        String suffix = allocate(mediaServerId);
-        return suffix == null ? null : "0" + suffix;
-    }
-
-    /**
-     * Legacy string-only allocation. New lifecycle-managed callers must use
-     * {@link #allocatePlaybackLease(String)} so the owner can be released.
-     */
-    @Deprecated
-    public String getPlayBackSsrc(String mediaServerId) {
-        if (!allocationReady(mediaServerId)) {
-            return null;
-        }
-        String suffix = allocate(mediaServerId);
-        return suffix == null ? null : "1" + suffix;
-    }
-
     public SsrcLease allocatePlayLease(String mediaServerId) {
         if (!allocationReady(mediaServerId)) {
             return null;
@@ -123,26 +97,6 @@ public class SSRCFactory {
             return null;
         }
         return allocateLease(mediaServerId, "1");
-    }
-
-    /**
-     * Legacy string-only allocation. New lifecycle-managed callers must use
-     * {@link #allocatePlayLease(MediaServer)} so the owner can be released.
-     */
-    @Deprecated
-    public String getPlaySsrc(MediaServer mediaServer) {
-        SsrcLease lease = allocatePlayLease(mediaServer);
-        return lease == null ? null : lease.getSsrc();
-    }
-
-    /**
-     * Legacy string-only allocation. New lifecycle-managed callers must use
-     * {@link #allocatePlaybackLease(MediaServer)} so the owner can be released.
-     */
-    @Deprecated
-    public String getPlayBackSsrc(MediaServer mediaServer) {
-        SsrcLease lease = allocatePlaybackLease(mediaServer);
-        return lease == null ? null : lease.getSsrc();
     }
 
     public SsrcLease allocatePlayLease(MediaServer mediaServer) {
@@ -185,12 +139,6 @@ public class SSRCFactory {
             if (bits != null && suffix >= 0) {
                 bits.clear(suffix);
             }
-        }
-    }
-
-    private String allocate(String mediaServerId) {
-        synchronized (lockMap.computeIfAbsent(mediaServerId, k -> new Object())) {
-            return allocateLocked(mediaServerId);
         }
     }
 
