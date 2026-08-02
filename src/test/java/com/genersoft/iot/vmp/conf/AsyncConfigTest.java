@@ -28,6 +28,12 @@ class AsyncConfigTest {
         assertEquals(EnableAsync.class, AsyncConfig.class.getAnnotation(EnableAsync.class).annotationType());
         assertEquals(true, AsyncConfig.class.getAnnotation(EnableAsync.class).proxyTargetClass());
         executor.shutdown();
+
+        ThreadPoolTaskExecutor sipExecutor = config.sipTaskExecutor();
+        assertEquals(4, sipExecutor.getCorePoolSize());
+        assertEquals(16, sipExecutor.getMaxPoolSize());
+        assertEquals(1000, sipExecutor.getQueueCapacity());
+        sipExecutor.shutdown();
     }
 
     @Test

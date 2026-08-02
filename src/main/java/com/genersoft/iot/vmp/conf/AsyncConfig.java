@@ -31,11 +31,21 @@ public class AsyncConfig implements AsyncConfigurer {
 
     @Bean(name = "applicationTaskExecutor")
     public ThreadPoolTaskExecutor applicationTaskExecutor() {
+        return createExecutor(corePoolSize, maxPoolSize, queueCapacity, "wvp-async-");
+    }
+
+    @Bean(name = "sipTaskExecutor")
+    public ThreadPoolTaskExecutor sipTaskExecutor() {
+        return createExecutor(Math.min(4, corePoolSize), Math.min(16, Math.max(corePoolSize, maxPoolSize)),
+                Math.min(1000, Math.max(1, queueCapacity)), "wvp-sip-");
+    }
+
+    private ThreadPoolTaskExecutor createExecutor(int core, int max, int queue, String prefix) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(corePoolSize);
-        executor.setMaxPoolSize(Math.max(corePoolSize, maxPoolSize));
-        executor.setQueueCapacity(Math.max(1, queueCapacity));
-        executor.setThreadNamePrefix("wvp-async-");
+        executor.setCorePoolSize(Math.max(1, core));
+        executor.setMaxPoolSize(Math.max(Math.max(1, core), max));
+        executor.setQueueCapacity(Math.max(1, queue));
+        executor.setThreadNamePrefix(prefix);
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(Math.max(1, awaitTerminationSeconds));

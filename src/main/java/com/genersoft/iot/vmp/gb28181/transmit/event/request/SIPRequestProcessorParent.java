@@ -44,7 +44,7 @@ public abstract class SIPRequestProcessorParent {
 	private SIPSender sipSender;
 
 	@Autowired
-	@Qualifier("applicationTaskExecutor")
+	@Qualifier("sipTaskExecutor")
 	private TaskExecutor applicationTaskExecutor;
 
 	public HeaderFactory getHeaderFactory() {
