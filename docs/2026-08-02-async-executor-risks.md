@@ -2,7 +2,7 @@
 
 项目现在通过 `AsyncConfig` 启用 `@Async`，默认使用有界的 `applicationTaskExecutor`：核心线程 8、最大线程 32、队列 2000。队列满时使用调用方执行策略，避免静默丢弃 SIP/媒体事件。
 
-SIP ACK 回复不再依赖父类方法的 Spring 自调用代理，而是显式提交到同一受控执行器。
+SIP 分发和 ACK 回复使用独立的 `sipTaskExecutor`，不再依赖父类方法的 Spring 自调用代理，避免普通媒体/业务异步任务挤占 SIP 线程池。
 
 ## 集成验证风险
 
