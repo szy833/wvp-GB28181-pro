@@ -13,7 +13,8 @@ import org.dom4j.DocumentException;
 import org.dom4j.Element;
 import org.dom4j.io.SAXReader;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.util.ObjectUtils;
 
 import javax.sip.*;
@@ -41,6 +42,10 @@ public abstract class SIPRequestProcessorParent {
 
 	@Autowired
 	private SIPSender sipSender;
+
+	@Autowired
+	@Qualifier("applicationTaskExecutor")
+	private TaskExecutor applicationTaskExecutor;
 
 	public HeaderFactory getHeaderFactory() {
 		try {
@@ -78,9 +83,14 @@ public abstract class SIPRequestProcessorParent {
 		return responseAck(sipRequest, statusCode, null);
 	}
 
-	@Async
 	public void responseAckAsync(SIPRequest sipRequest, int statusCode) throws SipException, InvalidArgumentException, ParseException {
-		responseAck(sipRequest, statusCode, null);
+		applicationTaskExecutor.execute(() -> {
+			try {
+				responseAck(sipRequest, statusCode, null);
+			} catch (SipException | InvalidArgumentException | ParseException e) {
+				log.error("[SIP响应] 异步回复失败，statusCode={}", statusCode, e);
+			}
+		});
 	}
 
 	public SIPResponse responseAck(SIPRequest sipRequest, int statusCode, String msg) throws SipException, InvalidArgumentException, ParseException {
