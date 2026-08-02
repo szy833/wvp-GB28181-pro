@@ -6,6 +6,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.CompletableFuture;
@@ -16,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class AsyncConfigTest {
 
     @Test
-    void exposesBoundedExecutorAndClassBasedAsyncProxy() {
+    void exposesBoundedExecutorAndClassBasedAsyncProxy() throws NoSuchMethodException {
         AsyncConfig config = new AsyncConfig();
 
         ThreadPoolTaskExecutor executor = config.applicationTaskExecutor();
@@ -27,6 +28,8 @@ class AsyncConfigTest {
         assertEquals(2000, executor.getQueueCapacity());
         assertEquals(EnableAsync.class, AsyncConfig.class.getAnnotation(EnableAsync.class).annotationType());
         assertEquals(true, AsyncConfig.class.getAnnotation(EnableAsync.class).proxyTargetClass());
+        org.junit.jupiter.api.Assertions.assertTrue(AsyncConfig.class.getMethod("applicationTaskExecutor")
+                .isAnnotationPresent(Primary.class));
         executor.shutdown();
 
         ThreadPoolTaskExecutor sipExecutor = config.sipTaskExecutor();
