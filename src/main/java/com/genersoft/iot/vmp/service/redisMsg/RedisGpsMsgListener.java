@@ -105,11 +105,19 @@ public class RedisGpsMsgListener implements MessageListener {
             log.debug("[REDIS的位置变化通知] 未找到轨迹通道：{}", gpsMsgInfo.getId());
             return;
         }
+        long timestamp = System.currentTimeMillis();
+        if (gpsMsgInfo.getTime() != null) {
+            Long parsed = DateUtil.yyyy_MM_dd_HH_mm_ssToTimestampMs(gpsMsgInfo.getTime());
+            if (parsed != null) {
+                timestamp = parsed;
+            }
+        }
+        final long positionTimestamp = timestamp;
         List<MobilePosition> positions = channels.stream().map(channel -> {
             MobilePosition position = new MobilePosition();
             position.setChannelId(channel.getGbId());
             position.setChannelDeviceId(channel.getGbDeviceId());
-            position.setTimestamp(DateUtil.yyyy_MM_dd_HH_mm_ssToTimestampMs(gpsMsgInfo.getTime()));
+            position.setTimestamp(positionTimestamp);
             position.setLongitude(gpsMsgInfo.getLng());
             position.setLatitude(gpsMsgInfo.getLat());
             position.setAltitude(gpsMsgInfo.getAltitude() == null ? 0 : gpsMsgInfo.getAltitude());
