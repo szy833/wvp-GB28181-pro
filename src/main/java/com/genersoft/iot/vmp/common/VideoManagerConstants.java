@@ -86,6 +86,9 @@ public class VideoManagerConstants {
 	 * 接收推流设备的GPS变化通知
 	 */
 	public static final String VM_MSG_GPS = "VM_MSG_GPS";
+	public static final String WVP_REDIS_STREAM_GPS_PREFIX = "WVP_REDIS_STREAM_GPS_";
+	public static final String WVP_REDIS_STREAM_ALARM_PREFIX = "WVP_REDIS_STREAM_ALARM_";
+	public static final String WVP_REDIS_STREAM_GROUP = "wvp";
 
 	/**
 	 * 接收推流设备的GPS变化通知
@@ -165,6 +168,7 @@ public class VideoManagerConstants {
 
 	public static final String WVP_STREAM_GB_ID_PREFIX = "memberNo_";
 	public static final String WVP_STREAM_GPS_MSG_PREFIX = "WVP_STREAM_GPS_MSG_";
+	public static final String WVP_STREAM_GPS_MSG_LATEST_PREFIX = "WVP_STREAM_GPS_MSG_LATEST_";
 	public static final String WVP_OTHER_SEND_RTP_INFO = "VMP_OTHER_SEND_RTP_INFO_";
 	public static final String WVP_OTHER_SEND_PS_INFO = "VMP_OTHER_SEND_PS_INFO_";
 	public static final String WVP_OTHER_RECEIVE_RTP_INFO = "VMP_OTHER_RECEIVE_RTP_INFO_";
