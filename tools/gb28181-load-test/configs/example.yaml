@@ -2,12 +2,34 @@ runId: demo-20260804
 sip:
   address: 127.0.0.1:5060
   local: 0.0.0.0:0
+  advertise: 127.0.0.1
 deviceCount: 1000
 idPrefix: loadtest-
 domain: 3402000000
 startRate: 20
 registerTtl: 1h
 keepalive: 30s
+metricsAddr: 127.0.0.1:19100
+device:
+  username: "{deviceId}"
+  password: change-me
+  realm: 3402000000
+  serverId: 34020000002000000001
+  name: GB28181 Load Test Device
+  manufacturer: gb28181-load-test
+  model: virtual-camera
+scenario:
+  name: steady-play
+  duration: 10m
+  playRate: 20
+  maxConcurrent: 200
+  playDuration: 2m
+  startupGrace: 30s
+control:
+  baseUrl: http://127.0.0.1:18080
+  token: ""
+  startPath: /api/play/start/%s/%s
+  stopPath: /api/play/stop/%s/%s
 media:
   file: ./media/sample.ps
 report:

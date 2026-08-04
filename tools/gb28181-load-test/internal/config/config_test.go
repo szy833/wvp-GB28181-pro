@@ -23,6 +23,10 @@ registerTtl: 1h
 keepalive: 30s
 media:
   file: sample.ps
+device:
+  username: loadtest
+  password: secret
+  serverId: 34020000002000000001
 report:
   json: report.json
 ` }

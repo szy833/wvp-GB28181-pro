@@ -8,7 +8,7 @@ import (
 )
 
 type SDPRequest struct { Address string; Port int; SSRC string; Mode string }
-type SDPResponse struct { Address string; Port int; Setup string; Connection string; SSRC string }
+type SDPResponse struct { Address string; Port int; Protocol string; Setup string; Connection string; SSRC string }
 
 func BuildPlaySDP(r SDPRequest) string {
 	mode := r.Mode; if mode == "" { mode = "TCP-PASSIVE" }
@@ -18,6 +18,6 @@ func BuildPlaySDP(r SDPRequest) string {
 
 func ParseSDP(payload []byte) (SDPResponse, error) {
 	var out SDPResponse; text := strings.ReplaceAll(string(payload), "\r\n", "\n")
-	for _, line := range strings.Split(text, "\n") { line = strings.TrimSpace(line); switch { case strings.HasPrefix(line, "c=IN IP4 "): out.Address = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4 ")); case strings.HasPrefix(line, "m=video "): p := strings.Fields(line); if len(p) > 1 { n, err := strconv.Atoi(p[1]); if err == nil { out.Port = n } }; case strings.HasPrefix(line, "a=setup:"): out.Setup = strings.TrimPrefix(line, "a=setup:"); case strings.HasPrefix(line, "a=connection:"): out.Connection = strings.TrimPrefix(line, "a=connection:"); case strings.HasPrefix(line, "y="): out.SSRC = strings.TrimSpace(strings.TrimPrefix(line, "y=")) } }
+	for _, line := range strings.Split(text, "\n") { line = strings.TrimSpace(line); switch { case strings.HasPrefix(line, "c=IN IP4 "): out.Address = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4 ")); case strings.HasPrefix(line, "m=video "): p := strings.Fields(line); if len(p) > 2 { n, err := strconv.Atoi(p[1]); if err == nil { out.Port = n }; out.Protocol = p[2] }; case strings.HasPrefix(line, "a=setup:"): out.Setup = strings.TrimPrefix(line, "a=setup:"); case strings.HasPrefix(line, "a=connection:"): out.Connection = strings.TrimPrefix(line, "a=connection:"); case strings.HasPrefix(line, "y="): out.SSRC = strings.TrimSpace(strings.TrimPrefix(line, "y=")) } }
 	if net.ParseIP(out.Address) == nil || out.Port <= 0 { return SDPResponse{}, fmt.Errorf("invalid SDP media address") }; return out, nil
 }

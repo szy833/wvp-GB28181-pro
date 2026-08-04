@@ -28,6 +28,10 @@ var branchCounter atomic.Uint64
 func branch() string { return fmt.Sprintf("z9hG4bK-loadtest-%d", branchCounter.Add(1)) }
 
 func baseRequest(method, target string, id device.Identity, local string, cseq uint32, body []byte) []byte {
+	return baseRequestCSeq(method, target, id, local, cseq, body)
+}
+
+func baseRequestCSeq(method, target string, id device.Identity, local string, cseq uint32, body []byte) []byte {
 	if cseq == 0 { cseq = 1 }
 	if local == "" { local = "127.0.0.1:5060" }
 	uri := fmt.Sprintf("sip:%s@%s", id.DeviceID, id.Domain)
@@ -37,11 +41,27 @@ func baseRequest(method, target string, id device.Identity, local string, cseq u
 }
 
 func BuildRegister(id device.Identity, target, local string, expires int) ([]byte, error) {
-	if target == "" { return nil, fmt.Errorf("target is empty") }; if expires <= 0 { return nil, fmt.Errorf("expires must be positive") }
-	b := baseRequest("REGISTER", target, id, local, 1, nil); b = bytes.Replace(b, []byte("Content-Type: application/sdp\r\n"), nil, 1); b = bytes.Replace(b, []byte("Content-Length: 0\r\n"), []byte(fmt.Sprintf("Expires: %d\r\nContent-Length: 0\r\n", expires)), 1); return b, nil
+	return BuildRegisterAuth(id, target, local, expires, "")
 }
 
+func BuildRegisterAuth(id device.Identity, target, local string, expires int, authorization string) ([]byte, error) {
+	return BuildRegisterAuthCSeq(id, target, local, expires, authorization, 1)
+}
+
+func BuildRegisterAuthCSeq(id device.Identity, target, local string, expires int, authorization string, cseq uint32) ([]byte, error) {
+	if target == "" { return nil, fmt.Errorf("target is empty") }; if expires <= 0 { return nil, fmt.Errorf("expires must be positive") }
+	b := baseRequestCSeq("REGISTER", target, id, local, cseq, nil); b = bytes.Replace(b, []byte("Content-Type: application/sdp\r\n"), nil, 1); b = bytes.Replace(b, []byte("Content-Length: 0\r\n"), []byte(fmt.Sprintf("Expires: %d\r\n%sContent-Length: 0\r\n", expires, authHeader(authorization))), 1); return b, nil
+}
+
+func authHeader(value string) string { if value == "" { return "" }; return "Authorization: " + value + "\r\n" }
+
 func BuildInvite(id device.Identity, target, sdp string) ([]byte, error) { if target == "" { return nil, fmt.Errorf("target is empty") }; return baseRequest("INVITE", target, id, "", 1, []byte(sdp)), nil }
+
+func BuildMessage(id device.Identity, target, local string, body []byte, cseq uint32) ([]byte, error) {
+	if target == "" { return nil, fmt.Errorf("target is empty") }; if cseq == 0 { cseq = 1 }
+	if local == "" { local = "127.0.0.1:5060" }; uri := fmt.Sprintf("sip:%s@%s", id.DeviceID, id.Domain)
+	text := fmt.Sprintf("MESSAGE %s SIP/2.0\r\nVia: SIP/2.0/UDP %s;branch=%s;rport\r\nFrom: <%s>;tag=%s\r\nTo: <%s>\r\nCall-ID: %s\r\nCSeq: %d MESSAGE\r\nMax-Forwards: 70\r\nContent-Type: Application/MANSCDP+xml\r\nContent-Length: %d\r\n\r\n", target, local, branch(), uri, id.CallID, target, id.CallID, cseq, len(body)); return append([]byte(text), body...), nil
+}
 
 func BuildAck(d Dialog) ([]byte, error) { return dialogRequest("ACK", d), nil }
 func BuildBye(d Dialog) ([]byte, error) { if d.CallID == "" { return nil, fmt.Errorf("dialog call id is empty") }; return dialogRequest("BYE", d), nil }
