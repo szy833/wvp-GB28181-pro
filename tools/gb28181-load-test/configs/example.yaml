@@ -1,0 +1,16 @@
+runId: demo-20260804
+sip:
+  address: 127.0.0.1:5060
+  local: 0.0.0.0:0
+deviceCount: 1000
+idPrefix: loadtest-
+domain: 3402000000
+startRate: 20
+registerTtl: 1h
+keepalive: 30s
+media:
+  file: ./media/sample.ps
+report:
+  json: ./reports/run.json
+  csv: ./reports/run.csv
+  addr: 127.0.0.1:19100
