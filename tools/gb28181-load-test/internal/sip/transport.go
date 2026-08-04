@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 )
 
 type Transport interface {
@@ -29,10 +30,19 @@ func (t *UDPTransport) Send(ctx context.Context, address net.Addr, payload []byt
 }
 
 func (t *UDPTransport) Receive(ctx context.Context) (Message, error) {
-	if deadline, ok := ctx.Deadline(); ok { _ = t.conn.SetReadDeadline(deadline) }
-	buf := make([]byte, 65535); n, _, err := t.conn.ReadFromUDP(buf)
-	if err != nil { if ctx.Err() != nil { return Message{}, ctx.Err() }; return Message{}, err }
-	return ParseMessage(buf[:n])
+	buf := make([]byte, 65535)
+	for {
+		deadline := time.Now().Add(500 * time.Millisecond)
+		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) { deadline = ctxDeadline }
+		_ = t.conn.SetReadDeadline(deadline)
+		n, _, err := t.conn.ReadFromUDP(buf)
+		if err != nil {
+			if ctx.Err() != nil { return Message{}, ctx.Err() }
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() { continue }
+			return Message{}, err
+		}
+		return ParseMessage(buf[:n])
+	}
 }
 
 func (t *UDPTransport) Close() error { return t.conn.Close() }

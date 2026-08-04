@@ -70,6 +70,7 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.IDPrefix) == "" { return errors.New("idPrefix must not be empty") }
 	if !strings.HasPrefix(c.IDPrefix, "loadtest-") { return errors.New("idPrefix must start with loadtest-") }
 	if strings.TrimSpace(c.Domain) == "" { return errors.New("domain must not be empty") }
+	for _, r := range c.Domain { if r < '0' || r > '9' { return errors.New("domain must contain only digits") } }
 	if _, _, err := net.SplitHostPort(c.SIP.Address); err != nil { return fmt.Errorf("invalid sip address: %w", err) }
 	if c.RegisterTTL <= 0 { return errors.New("registerTtl must be positive") }
 	if c.Keepalive <= 0 { return errors.New("keepalive must be positive") }

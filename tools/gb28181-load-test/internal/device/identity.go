@@ -44,7 +44,10 @@ func (f *IdentityFactory) New(index int) (Identity, error) {
 	stream := deviceID + "_" + channelID
 	f.mu.Lock(); defer f.mu.Unlock()
 	for n := 0; n < 10000; n++ {
-		candidate := f.typePrefix + f.Domain + fmt.Sprintf("%04d", (index+n)%10000)
+		// GB28181 SSRC is kept at ten decimal digits: type prefix + five
+		// domain digits + four sequence digits.
+		domainNumber, _ := strconv.ParseUint(f.Domain, 10, 64)
+		candidate := fmt.Sprintf("%s%05d%04d", f.typePrefix, domainNumber%100000, (index+n)%10000)
 		if _, exists := f.used[candidate]; !exists { f.used[candidate] = struct{}{}; return Identity{DeviceID: deviceID, ChannelID: channelID, CallID: callID, Stream: stream, SSRC: candidate, Index: index, Domain: f.Domain}, nil }
 	}
 	return Identity{}, fmt.Errorf("ssrc exhausted")
