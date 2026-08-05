@@ -1,5 +1,7 @@
 # GB28181 虚拟设备并发压测工具
 
+完整的安装、配置、WVP 准备、阶梯压测和排障步骤见仓库文档：`../../docs/GB28181虚拟设备压测工具使用手册.md`。
+
 这是一个独立 Go 工具，用于在测试环境模拟大量 GB28181 设备并驱动 WVP 点播。工具不修改 WVP 代码，支持 UDP SIP、Digest REGISTER、Catalog/DeviceInfo/DeviceStatus 查询响应、UDP RTP/PS、TCP-PASSIVE RTP、共享媒体文件、WVP HTTP 点播调度和 Prometheus 指标。
 
 ## 构建和运行
