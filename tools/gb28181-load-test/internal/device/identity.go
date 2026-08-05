@@ -6,17 +6,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/shizy/gb28181-load-test/internal/model"
 )
 
-type Identity struct {
-	DeviceID  string
-	ChannelID string
-	CallID    string
-	Stream    string
-	SSRC      string
-	Index     int
-	Domain    string
-}
+type Identity = model.Identity
 
 type IdentityFactory struct {
 	RunID  string
