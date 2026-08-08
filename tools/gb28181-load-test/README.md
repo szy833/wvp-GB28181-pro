@@ -13,6 +13,22 @@ go test ./...
 go run ./cmd/gb28181-load-test -config configs/example.yaml
 ```
 
+运行阶段不需要 Go。可以在有 Go 的构建机上生成二进制，再将 `bin/gb28181-load-test`、配置文件和 `media` 目录复制到压测机：
+
+```bash
+go build -o bin/gb28181-load-test ./cmd/gb28181-load-test
+GB28181_LOADTEST_INTEGRATION=1 \
+  ./scripts/run-integration.sh configs/test-10.yaml
+```
+
+如果二进制放在其他位置，可通过 `GB28181_LOADTEST_BIN` 指定：
+
+```bash
+GB28181_LOADTEST_INTEGRATION=1 \
+GB28181_LOADTEST_BIN=/opt/gb28181-load-test \
+  ./scripts/run-integration.sh /opt/gb28181-load-test/test.yaml
+```
+
 设备 ID 必须以 `loadtest-` 开头，避免误连生产设备。配置中的 `sip.advertise` 必须是 WVP 能访问到的虚拟设备主机地址；`sip.local` 可以使用 `0.0.0.0:0`，工具会为每个设备分配独立端口。`device.username` 支持 `{deviceId}` 模板，推荐使用该模板让每台虚拟设备使用自己的注册用户名。
 
 `media.file` 应指向预编码 PS 文件。工具只在启动时读取一次文件，所有虚拟设备共享只读媒体缓冲区，每个播放建立独立读取游标。
