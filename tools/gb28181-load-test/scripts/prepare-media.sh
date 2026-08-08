@@ -12,5 +12,10 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "未找到 ffmpeg，请先安装 ffmpeg" >&2
   exit 1
 fi
-ffmpeg -hide_banner -loglevel error -y -i "$input" -an -c:v copy -f mpegps "$output"
+# FFmpeg names the MPEG program-stream muxer "mpeg"; "mpegps" is not a
+# portable muxer name and is rejected by common FFmpeg builds.
+if ! ffmpeg -hide_banner -loglevel error -y -i "$input" -map 0:v:0 -an -c:v copy -f mpeg "$output"; then
+  echo "视频流无法直接封装为 MPEG-PS，尝试转码为 MPEG-2 视频" >&2
+  ffmpeg -hide_banner -loglevel error -y -i "$input" -map 0:v:0 -an -c:v mpeg2video -b:v 4M -f mpeg "$output"
+fi
 echo "已生成 $output"
