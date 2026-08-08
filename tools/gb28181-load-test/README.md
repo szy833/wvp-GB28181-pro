@@ -24,7 +24,7 @@ go run ./cmd/gb28181-load-test -config configs/example.yaml
 - `device-bye`：设备主动发送 BYE，验证会话和 RTP 资源释放。
 - `churn-play`：周期性创建和销毁播放，观察峰值与资源回收。
 
-当 `control.baseUrl` 不为空时，运行器会按 `scenario.playRate` 调用 WVP `/api/play/start/{deviceId}/{channelId}`，并在 `scenario.playDuration` 后调用停止接口。WVP 需要 JWT 时，将令牌填入 `control.token`。实时指标地址由 `metricsAddr` 配置，访问 `/metrics`。
+当 `control.baseUrl` 不为空时，运行器会按 `scenario.playRate` 调用 WVP `/api/play/start/{deviceId}/{channelId}`，并在 `scenario.playDuration` 后调用停止接口。WVP 需要 JWT 时，将登录返回的 `access-token` 值填入 `control.token`，不要添加 `Bearer` 前缀。实时指标地址由 `metricsAddr` 配置，访问 `/metrics`。
 
 `no-media-timeout` 场景仍返回 INVITE 的 200 OK，但不会发送 RTP，用于验证 WVP 收流超时和资源清理；`device-bye` 场景在媒体启动后由虚拟设备主动发送 BYE。
 
