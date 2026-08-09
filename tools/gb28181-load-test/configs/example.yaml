@@ -4,7 +4,10 @@ sip:
   local: 0.0.0.0:0
   advertise: 127.0.0.1
 deviceCount: 1000
-idPrefix: loadtest-
+identity:
+  mode: numeric
+  deviceBase: "34020000001110000000"
+  channelBase: "34020000001310000000"
 domain: 3402000000
 startRate: 20
 registerTtl: 1h

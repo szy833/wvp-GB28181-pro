@@ -29,7 +29,7 @@ GB28181_LOADTEST_BIN=/opt/gb28181-load-test \
   ./scripts/run-integration.sh /opt/gb28181-load-test/test.yaml
 ```
 
-设备 ID 必须以 `loadtest-` 开头，避免误连生产设备。配置中的 `sip.advertise` 必须是 WVP 能访问到的虚拟设备主机地址；`sip.local` 可以使用 `0.0.0.0:0`，工具会为每个设备分配独立端口。`device.username` 支持 `{deviceId}` 模板，推荐使用该模板让每台虚拟设备使用自己的注册用户名。
+默认 `identity.mode: numeric` 生成 20 位纯数字的设备和通道 ID，可以直接通过 WVP 的严格 GB28181 设备编号校验。`deviceBase` 和 `channelBase` 的前 14 位组成测试编号段，最后 6 位是递增序号；编号段必须是测试专用，不能与生产设备重叠。需要兼容旧配置时可显式使用 `identity.mode: legacy` 和 `idPrefix: loadtest-`，但该模式在 WVP 严格设备 ID 校验开启时会被拒绝。配置中的 `sip.advertise` 必须是 WVP 能访问到的虚拟设备主机地址；`sip.local` 可以使用 `0.0.0.0:0`，工具会为每个设备分配独立端口。`device.username` 支持 `{deviceId}` 模板，推荐使用该模板让每台虚拟设备使用自己的注册用户名。
 
 `media.file` 应指向预编码 PS 文件。工具只在启动时读取一次文件，所有虚拟设备共享只读媒体缓冲区，每个播放建立独立读取游标。
 
