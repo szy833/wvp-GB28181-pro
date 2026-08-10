@@ -33,6 +33,39 @@ GB28181_LOADTEST_BIN=/opt/gb28181-load-test \
 
 `media.file` 应指向预编码 PS 文件。工具只在启动时读取一次文件，所有虚拟设备共享只读媒体缓冲区，每个播放建立独立读取游标。
 
+## 压测结果
+
+运行结束后，控制台会打印设备启动阶段、点播阶段、成功率、点播停止结果和控制接口延迟分位数。例如：
+
+```text
+run=demo-20260804 devices=1000 duration=600.0s
+stage=startup devices=1000 success=1000 failed=0 successRate=100.0% duration=1.245s
+stage=play devices=12000 success=11980 failed=20 successRate=99.8% duration=600.0s
+events registerSuccess=1000 catalogResponses=1000 inviteSuccess=11980 mediaStarted=11980 deviceBye=0 deviceByeSent=11960
+plays total=12000 success=11980 failed=20 stopSuccess=11960
+latency wvp_control_latency_seconds P50=0.100s
+latency wvp_control_latency_seconds P95=0.500s
+latency wvp_control_latency_seconds P99=1.000s
+details=./reports/run.details.csv
+```
+
+报告文件包含三种粒度：
+
+- `report.json`：完整配置摘要、阶段汇总、每台设备的 REGISTER/Catalog/INVITE/RTP/BYE 事件计数、每次点播的开始/停止结果和错误信息。
+- `report.csv`：阶段汇总，保持原有格式兼容。
+- `report.details.csv`：设备和点播明细；当 `report.detailCsv` 未配置时，由 `report.csv` 自动派生。例如 `run.csv` 对应 `run.details.csv`。
+
+可以显式指定明细文件：
+
+```yaml
+report:
+  json: ./reports/run.json
+  csv: ./reports/run.csv
+  detailCsv: ./reports/run.details.csv
+```
+
+Prometheus `/metrics` 继续提供原有计数器和延迟的 `_count`、`_sum`、`_max`，并增加 `_p50`、`_p95`、`_p99` 近似分位数，以及 REGISTER、Catalog、INVITE、媒体启动和设备 BYE 阶段计数。JSON/CSV 不写入设备密码、控制 token 或 SIP Authorization。
+
 ## 测试场景
 
 - `steady-play`：保持设备在线并持续点播。

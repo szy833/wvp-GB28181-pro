@@ -73,9 +73,10 @@ type MediaConfig struct {
 }
 
 type ReportConfig struct {
-	JSON string `yaml:"json" json:"json"`
-	CSV  string `yaml:"csv" json:"csv"`
-	Addr string `yaml:"addr" json:"addr"`
+	JSON      string `yaml:"json" json:"json"`
+	CSV       string `yaml:"csv" json:"csv"`
+	DetailCSV string `yaml:"detailCsv" json:"detailCsv"`
+	Addr      string `yaml:"addr" json:"addr"`
 }
 
 type rawConfig struct {

@@ -155,7 +155,16 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	fmt.Printf("run=%s devices=%d started=%s finished=%s\n", report.RunID, report.DeviceCount, report.StartedAt.Format("2006-01-02T15:04:05Z07:00"), report.FinishedAt.Format("2006-01-02T15:04:05Z07:00"))
+	detailPath := cfg.Report.DetailCSV
+	if detailPath == "" && cfg.Report.CSV != "" {
+		detailPath = metrics.DetailCSVPath(cfg.Report.CSV)
+	}
+	if detailPath != "" {
+		if err := metrics.WriteDetailCSV(detailPath, report); err != nil {
+			log.Fatal(err)
+		}
+	}
+	metrics.PrintSummary(os.Stdout, report, detailPath)
 }
 
 func startMetricsServer(address string, registry *metrics.Registry) *http.Server {
