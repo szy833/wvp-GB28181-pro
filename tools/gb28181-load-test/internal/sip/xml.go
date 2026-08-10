@@ -1,13 +1,39 @@
 package sip
 
-import "encoding/xml"
+import (
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"strings"
+)
 
 type keepalive struct { XMLName xml.Name `xml:"Notify"`; CmdType string `xml:"CmdType"`; SN int `xml:"SN"`; DeviceID string `xml:"DeviceID"`; Status string `xml:"Status"`; Info string `xml:"Info,omitempty"` }
 
 func BuildKeepaliveXML(deviceID, manufacturer string) []byte { b, _ := xml.Marshal(keepalive{CmdType: "Keepalive", SN: 1, DeviceID: deviceID, Status: "OK", Info: manufacturer}); return append([]byte(xml.Header), b...) }
 
 type Query struct { CmdType string `xml:"CmdType"`; SN int `xml:"SN"`; DeviceID string `xml:"DeviceID"` }
-func ParseQuery(body []byte) (Query, error) { var q Query; err := xml.Unmarshal(body, &q); return q, err }
+
+// ParseQuery accepts the GB2312/GBK declarations commonly emitted by GB28181
+// devices. The query fields are protocol identifiers and are ASCII in practice;
+// preserving the bytes also keeps this package dependency-free.
+func ParseQuery(body []byte) (Query, error) {
+	var q Query
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		name := strings.ToLower(strings.TrimSpace(charset))
+		switch name {
+		case "utf-8", "utf8", "gb2312", "gbk", "gb18030", "iso-8859-1":
+			return input, nil
+		default:
+			return nil, fmt.Errorf("unsupported XML charset %q", charset)
+		}
+	}
+	if err := decoder.Decode(&q); err != nil {
+		return q, err
+	}
+	return q, nil
+}
 
 type catalogResponse struct { XMLName xml.Name `xml:"Response"`; CmdType string `xml:"CmdType"`; SN int `xml:"SN"`; DeviceID string `xml:"DeviceID"`; SumNum int `xml:"SumNum"`; DeviceList catalogList `xml:"DeviceList"` }
 type catalogList struct { Num int `xml:"Num,attr"`; Items []CatalogItem `xml:"Item"` }

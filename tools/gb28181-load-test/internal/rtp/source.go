@@ -15,7 +15,20 @@ type SharedReader struct { media *SharedMedia; chunk int; pos int; timestamp int
 
 func NewSharedMedia(path string, maxSize int64) (*SharedMedia, error) { if path == "" { return nil, fmt.Errorf("media file is empty") }; st, err := os.Stat(path); if err != nil { return nil, err }; if st.Size() == 0 { return nil, fmt.Errorf("media file is empty") }; if maxSize > 0 && st.Size() > maxSize { return nil, fmt.Errorf("media file exceeds limit") }; data, err := os.ReadFile(path); if err != nil { return nil, err }; return &SharedMedia{data: data}, nil }
 func (m *SharedMedia) NewReader(chunk int) *SharedReader { if chunk <= 0 { chunk = 1200 }; return &SharedReader{media: m, chunk: chunk} }
-func (r *SharedReader) Next(ctx context.Context) (MediaUnit, error) { select { case <-ctx.Done(): return MediaUnit{}, ctx.Err(); default: }; r.mu.Lock(); defer r.mu.Unlock(); if r.closed { return MediaUnit{}, fmt.Errorf("source closed") }; if len(r.media.data) == 0 { return MediaUnit{}, fmt.Errorf("shared media is empty") }; if r.pos >= len(r.media.data) { r.pos = 0; r.timestamp = 0 }; end := r.pos + r.chunk; if end > len(r.media.data) { end = len(r.media.data) }; out := MediaUnit{Data: append([]byte(nil), r.media.data[r.pos:end]...), Timestamp: r.timestamp}; r.pos = end; r.timestamp += 3600; return out, nil }
+func (r *SharedReader) Next(ctx context.Context) (MediaUnit, error) {
+	select { case <-ctx.Done(): return MediaUnit{}, ctx.Err(); default: }
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed { return MediaUnit{}, fmt.Errorf("source closed") }
+	if len(r.media.data) == 0 { return MediaUnit{}, fmt.Errorf("shared media is empty") }
+	if r.pos >= len(r.media.data) { r.pos = 0; r.timestamp = 0 }
+	// Keep one complete PS program in a single RTP timestamp. Packetizer will
+	// fragment it into RTP packets while preserving the decoder's frame boundary.
+	out := MediaUnit{Data: append([]byte(nil), r.media.data...), Timestamp: r.timestamp}
+	r.pos = len(r.media.data)
+	r.timestamp += 3600
+	return out, nil
+}
 func (r *SharedReader) Reset() error { r.mu.Lock(); defer r.mu.Unlock(); if r.closed { return fmt.Errorf("source closed") }; r.pos, r.timestamp = 0, 0; return nil }
 func (r *SharedReader) Close() error { r.mu.Lock(); r.closed = true; r.mu.Unlock(); return nil }
 
