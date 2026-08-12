@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, text string) string {
@@ -97,12 +98,114 @@ func TestValidateRejectsInvalidValues(t *testing.T) {
 			if tc.name == "address" {
 				text = "sip:\n  address: bad\n" + text[strings.Index(text, "deviceCount:"):]
 			} else {
-				text = strings.Replace(text, strings.Split(tc.replace, ":")[0]+": "+strings.Split(tc.replace, ": ")[1], tc.replace, 1)
+				key, value, _ := strings.Cut(tc.replace, ": ")
+				lines := strings.Split(text, "\n")
+				for i, line := range lines {
+					if strings.HasPrefix(line, key+": ") {
+						lines[i] = key + ": " + value
+						break
+					}
+				}
+				text = strings.Join(lines, "\n")
 			}
 			_, err := Load(writeConfig(t, text))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error=%v", err)
 			}
 		})
+	}
+}
+
+func monitoringYAML() string {
+	return validYAML() + `monitoring:
+  enabled: true
+  sampleInterval: 20s
+  prometheus:
+    url: http://prometheus.example:9090
+    queryTimeout: 3s
+    step: 20s
+    queries:
+      wvpCpu: process_cpu_usage
+  zlm:
+    enabled: true
+    url: http://zlm.example:19001
+    secret: should-not-be-in-report
+    mediaServerId: zlm-1
+  slo:
+    registerSuccessRate: 0.99
+    maxCpuPercent: 90
+`
+}
+
+func TestLoadMonitoringConfigParsesDurationsAndQueries(t *testing.T) {
+	c, err := Load(writeConfig(t, monitoringYAML()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Monitoring.Enabled || c.Monitoring.SampleInterval != 20*time.Second {
+		t.Fatalf("unexpected monitoring config: %+v", c.Monitoring)
+	}
+	if c.Monitoring.Prometheus.QueryTimeout != 3*time.Second || c.Monitoring.Prometheus.Step != 20*time.Second {
+		t.Fatalf("unexpected prometheus durations: %+v", c.Monitoring.Prometheus)
+	}
+	if c.Monitoring.Prometheus.Queries.WVPCPU != "process_cpu_usage" {
+		t.Fatalf("custom query was not parsed: %+v", c.Monitoring.Prometheus.Queries)
+	}
+	if !c.Monitoring.ZLM.Enabled || c.Monitoring.ZLM.MediaServerID != "zlm-1" {
+		t.Fatalf("unexpected zlm config: %+v", c.Monitoring.ZLM)
+	}
+	if c.Monitoring.SLO.RegisterSuccessRate != 0.99 || c.Monitoring.SLO.MaxCPUPercent != 90 {
+		t.Fatalf("unexpected slo config: %+v", c.Monitoring.SLO)
+	}
+}
+
+func TestMonitoringDisabledKeepsDefaultsAndSkipsEndpointValidation(t *testing.T) {
+	text := validYAML() + `monitoring:
+  enabled: false
+  prometheus:
+    url: ://bad
+`
+	c, err := Load(writeConfig(t, text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Monitoring.Enabled {
+		t.Fatal("monitoring should be disabled")
+	}
+	if c.Monitoring.SampleInterval != 15*time.Second || c.Monitoring.Prometheus.QueryTimeout != 10*time.Second {
+		t.Fatalf("unexpected monitoring defaults: %+v", c.Monitoring)
+	}
+}
+
+func TestMonitoringEnabledRequiresValidEndpoints(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"prometheus url", validYAML() + "monitoring:\n  enabled: true\n", "prometheus.url"},
+		{"zlm url", validYAML() + "monitoring:\n  enabled: true\n  prometheus:\n    url: http://127.0.0.1:9090\n  zlm:\n    enabled: true\n", "zlm.url"},
+		{"sample interval", monitoringYAML() + "", ""},
+	}
+	for _, tc := range tests[:2] {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.text))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMonitoringRejectsInvalidSLO(t *testing.T) {
+	for _, replacement := range []string{
+		"registerSuccessRate: 1.1",
+		"maxCpuPercent: 101",
+		"maxResidualStreams: -1",
+	} {
+		text := validYAML() + "monitoring:\n  enabled: true\n  prometheus:\n    url: http://127.0.0.1:9090\n  slo:\n    " + replacement + "\n"
+		if _, err := Load(writeConfig(t, text)); err == nil {
+			t.Fatalf("expected validation error for %s", replacement)
+		}
 	}
 }
