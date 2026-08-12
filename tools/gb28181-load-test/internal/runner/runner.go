@@ -9,6 +9,7 @@ import (
 	"github.com/shizy/gb28181-load-test/internal/config"
 	"github.com/shizy/gb28181-load-test/internal/device"
 	"github.com/shizy/gb28181-load-test/internal/metrics"
+	"github.com/shizy/gb28181-load-test/internal/monitoring"
 )
 
 type Factory interface {
@@ -16,23 +17,26 @@ type Factory interface {
 }
 
 type Runner struct {
-	Metrics        *metrics.Registry
-	PlayController PlayController
-	PlayRate       float64
-	MaxConcurrent  int
-	PlayDuration   time.Duration
-	StartupGrace   time.Duration
+	Metrics         *metrics.Registry
+	PlayController  PlayController
+	PlayRate        float64
+	MaxConcurrent   int
+	PlayDuration    time.Duration
+	StartupGrace    time.Duration
+	ResourceSamples []monitoring.ResourceSample
 }
 
 type resultCollector struct {
-	mu      sync.Mutex
-	devices map[string]*metrics.DeviceResult
-	plays   []metrics.PlayResult
-	metrics *metrics.Registry
+	mu           sync.Mutex
+	devices      map[string]*metrics.DeviceResult
+	plays        []metrics.PlayResult
+	playEvents   map[string]map[string][]time.Time
+	pendingPlays map[string][]int
+	metrics      *metrics.Registry
 }
 
 func newResultCollector(registry *metrics.Registry) *resultCollector {
-	return &resultCollector{devices: make(map[string]*metrics.DeviceResult), metrics: registry}
+	return &resultCollector{devices: make(map[string]*metrics.DeviceResult), playEvents: make(map[string]map[string][]time.Time), pendingPlays: make(map[string][]int), metrics: registry}
 }
 
 func (c *resultCollector) RecordDevice(d *device.Device) {
@@ -80,8 +84,10 @@ func (c *resultCollector) OnDeviceEvent(event device.DeviceEvent) {
 		result.CatalogSuccess++
 	case "invite_success":
 		result.InviteSuccess++
+		c.recordPlayEventLocked(event.DeviceID, "invite_success", event.At)
 	case "media_started":
 		result.MediaStarted++
+		c.recordPlayEventLocked(event.DeviceID, "media_started", event.At)
 	case "device_bye":
 		result.DeviceBye++
 	case "device_bye_sent":
@@ -117,10 +123,91 @@ func (c *resultCollector) OnDeviceEvent(event device.DeviceEvent) {
 	}
 }
 
+func (c *resultCollector) recordPlayEventLocked(deviceID, event string, at time.Time) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if c.playEvents[deviceID] == nil {
+		c.playEvents[deviceID] = make(map[string][]time.Time)
+	}
+	c.playEvents[deviceID][event] = append(c.playEvents[deviceID][event], at)
+	c.applyPlayEventsLocked(deviceID)
+}
+
+func (c *resultCollector) OnPlayEvent(deviceID, event string, at time.Time) {
+	c.mu.Lock()
+	c.recordPlayEventLocked(deviceID, event, at)
+	c.mu.Unlock()
+}
+
 func (c *resultCollector) RecordPlay(result metrics.PlayResult) {
 	c.mu.Lock()
 	c.plays = append(c.plays, result)
+	if result.StartSuccess {
+		c.pendingPlays[result.DeviceID] = append(c.pendingPlays[result.DeviceID], len(c.plays)-1)
+		c.applyPlayEventsLocked(result.DeviceID)
+	}
 	c.mu.Unlock()
+}
+
+// applyPlayEventsLocked joins asynchronous device events to the oldest play
+// on the same device that is still missing that phase. A queue is required:
+// one virtual device can be scheduled again before its previous media event
+// arrives, so a single timestamp would overwrite an earlier play.
+func (c *resultCollector) applyPlayEventsLocked(deviceID string) {
+	events := c.playEvents[deviceID]
+	indexes := c.pendingPlays[deviceID]
+	for _, phase := range []string{"invite_success", "media_started"} {
+		queue := events[phase]
+		for len(queue) > 0 {
+			match := -1
+			for _, index := range indexes {
+				if index < 0 || index >= len(c.plays) {
+					continue
+				}
+				play := &c.plays[index]
+				if phase == "invite_success" && play.InviteAt.IsZero() || phase == "media_started" && play.MediaAt.IsZero() {
+					match = index
+					break
+				}
+			}
+			if match < 0 {
+				break
+			}
+			at := queue[0]
+			queue = queue[1:]
+			play := &c.plays[match]
+			if phase == "invite_success" {
+				play.InviteAt = at
+				play.InviteLatencySeconds = at.Sub(play.StartedAt).Seconds()
+				if c.metrics != nil {
+					c.metrics.Observe("invite_latency_seconds", play.InviteLatencySeconds)
+				}
+			} else {
+				play.MediaAt = at
+				play.MediaConfirmationLatencySeconds = at.Sub(play.StartedAt).Seconds()
+				if c.metrics != nil {
+					c.metrics.Observe("media_confirmation_latency_seconds", play.MediaConfirmationLatencySeconds)
+				}
+			}
+		}
+		events[phase] = queue
+	}
+	remaining := indexes[:0]
+	for _, index := range indexes {
+		play := &c.plays[index]
+		if play.InviteAt.IsZero() || play.MediaAt.IsZero() {
+			remaining = append(remaining, index)
+		}
+	}
+	if len(remaining) == 0 {
+		delete(c.pendingPlays, deviceID)
+	} else {
+		c.pendingPlays[deviceID] = remaining
+	}
+	if len(events["invite_success"]) == 0 && len(events["media_started"]) == 0 {
+		delete(c.playEvents, deviceID)
+	}
 }
 
 func (c *resultCollector) DeviceResults() []metrics.DeviceResult {
@@ -259,5 +346,37 @@ func (r *Runner) Run(ctx context.Context, cfg config.Config, factory Factory) (m
 	report.Devices = collector.DeviceResults()
 	report.Plays = collector.PlayResults()
 	report.Metrics = r.Metrics.Snapshot()
+	report.ResourceSamples = append([]monitoring.ResourceSample(nil), r.ResourceSamples...)
+	report.Resources = metrics.SummarizeResources(report.ResourceSamples)
+	report.Business = businessSummary(report)
 	return report, nil
+}
+
+func businessSummary(report metrics.Report) metrics.BusinessSummary {
+	registerRequests, registerSuccess, catalog, plays, playSuccess, media, stopAttempted, stopSuccess := 0, 0, 0, 0, 0, 0, 0, 0
+	for _, d := range report.Devices {
+		registerRequests += d.RegisterRequests
+		registerSuccess += d.RegisterSuccess
+		catalog += d.CatalogSuccess
+		media += d.MediaStarted
+	}
+	for _, p := range report.Plays {
+		plays++
+		if p.StartSuccess {
+			playSuccess++
+		}
+		if p.StopAttempted {
+			stopAttempted++
+			if p.StopSuccess {
+				stopSuccess++
+			}
+		}
+	}
+	rate := func(success, total int) float64 {
+		if total == 0 {
+			return 1
+		}
+		return float64(success) / float64(total)
+	}
+	return metrics.BusinessSummary{RegisterSuccessRate: rate(registerSuccess, registerRequests), CatalogSuccessRate: rate(catalog, len(report.Devices)), PlaySuccessRate: rate(playSuccess, plays), MediaSuccessRate: rate(media, playSuccess), StopSuccessRate: rate(stopSuccess, stopAttempted), ControlLatencyP95: report.Metrics["wvp_control_latency_seconds_p95"], ControlLatencyP99: report.Metrics["wvp_control_latency_seconds_p99"]}
 }

@@ -66,6 +66,31 @@ report:
 
 Prometheus `/metrics` 继续提供原有计数器和延迟的 `_count`、`_sum`、`_max`，并增加 `_p50`、`_p95`、`_p99` 近似分位数，以及 REGISTER、Catalog、INVITE、媒体启动和设备 BYE 阶段计数。JSON/CSV 不写入设备密码、控制 token 或 SIP Authorization。
 
+## 混合监控与容量判定
+
+工具可同时采集业务、ZLM 和 Prometheus 资源指标：
+
+```yaml
+monitoring:
+  enabled: true
+  sampleInterval: 15s
+  prometheus:
+    url: http://127.0.0.1:9090
+    queryTimeout: 10s
+    step: 15s
+  zlm:
+    enabled: true
+    url: http://127.0.0.1:19001
+    mediaServerId: zlmediakit-local
+report:
+  resourcesCsv: ./reports/run.resources.csv
+  markdown: ./reports/run.md
+```
+
+Prometheus 需要已部署 WVP、主机、Redis 和 MySQL exporter；不同环境的指标名可通过 `monitoring.prometheus.queries` 覆盖。ZLM 采集 `getMediaList` 的流数量、RTP 流、业务流和最终残留流。
+
+报告会输出 `PASS`、`WARNING`、`FAIL` 或 `INCONCLUSIVE`：监控不可用时不会把缺失数据当作 0。`run.resources.csv` 保存原始采样，`run.md` 提供人工审阅版容量报告。只有多个阶梯负载都满足 SLO，才能确认稳定容量；单次报告只表示当前负载的判定。
+
 ## 测试场景
 
 - `steady-play`：保持设备在线并持续点播。

@@ -7,6 +7,7 @@ import (
 	"github.com/shizy/gb28181-load-test/internal/config"
 	"github.com/shizy/gb28181-load-test/internal/device"
 	"github.com/shizy/gb28181-load-test/internal/metrics"
+	"github.com/shizy/gb28181-load-test/internal/monitoring"
 	"github.com/shizy/gb28181-load-test/internal/rtp"
 	"github.com/shizy/gb28181-load-test/internal/runner"
 	"github.com/shizy/gb28181-load-test/internal/sip"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -137,6 +139,48 @@ func main() {
 		runCtx, cancel = context.WithTimeout(ctx, cfg.Scenario.Duration)
 	}
 	defer cancel()
+	var resourceSamples []monitoring.ResourceSample
+	if cfg.Monitoring.Enabled {
+		samplerCtx, stopSampler := context.WithCancel(context.Background())
+		var prometheusClient monitoring.PrometheusClient
+		if cfg.Monitoring.Prometheus.URL != "" {
+			prometheusClient = monitoring.NewPrometheusClient(cfg.Monitoring.Prometheus.URL, cfg.Monitoring.Prometheus.QueryTimeout)
+		}
+		var zlmClient monitoring.ZLMStreamLister
+		if cfg.Monitoring.ZLM.Enabled && cfg.Monitoring.ZLM.URL != "" {
+			zlmClient = monitoring.NewZLMClient(cfg.Monitoring.ZLM.URL, cfg.Monitoring.ZLM.Secret, cfg.Monitoring.ZLM.MediaServerID, cfg.Monitoring.Prometheus.QueryTimeout)
+		}
+		sampler := &monitoring.ResourceSampler{Interval: cfg.Monitoring.SampleInterval, QueryTimeout: cfg.Monitoring.Prometheus.QueryTimeout, Step: cfg.Monitoring.Prometheus.Step, Prometheus: prometheusClient, Queries: monitoringQueries(cfg.Monitoring.Prometheus.Queries), ZLM: zlmClient}
+		resourceChannel := sampler.Start(samplerCtx, time.Now())
+		r := runner.Runner{Metrics: reg, PlayRate: cfg.Scenario.PlayRate, MaxConcurrent: cfg.Scenario.MaxConcurrent, PlayDuration: cfg.Scenario.PlayDuration, StartupGrace: cfg.Scenario.StartupGrace}
+		if cfg.Control.BaseURL != "" {
+			r.PlayController = &runner.HTTPPlayController{BaseURL: cfg.Control.BaseURL, Token: cfg.Control.Token, StartPath: cfg.Control.StartPath, StopPath: cfg.Control.StopPath, Metrics: reg}
+		}
+		report, err := r.Run(runCtx, cfg, deviceFactory{identities: ids, cfg: cfg, media: media})
+		if err != nil {
+			stopSampler()
+			for range resourceChannel {
+			}
+			log.Fatal(err)
+		}
+		// Stop sampling only after Runner cleanup has completed so the final
+		// ZLM snapshot reflects post-test residual streams.
+		stopSampler()
+		for sample := range resourceChannel {
+			resourceSamples = append(resourceSamples, sample)
+		}
+		report.ResourceSamples = resourceSamples
+		finalizeMonitoring(&report, cfg.Monitoring.SLO, cfg.Monitoring.ZLM.Enabled)
+		if cfg.Report.ResourcesCSV == "" && cfg.Report.CSV != "" {
+			cfg.Report.ResourcesCSV = strings.TrimSuffix(cfg.Report.CSV, filepath.Ext(cfg.Report.CSV)) + ".resources" + filepath.Ext(cfg.Report.CSV)
+		}
+		if cfg.Report.Markdown == "" && cfg.Report.CSV != "" {
+			cfg.Report.Markdown = strings.TrimSuffix(cfg.Report.CSV, filepath.Ext(cfg.Report.CSV)) + ".md"
+		}
+		writeReports(cfg, report)
+		metrics.PrintSummary(os.Stdout, report, detailPath(cfg))
+		return
+	}
 	r := runner.Runner{Metrics: reg, PlayRate: cfg.Scenario.PlayRate, MaxConcurrent: cfg.Scenario.MaxConcurrent, PlayDuration: cfg.Scenario.PlayDuration, StartupGrace: cfg.Scenario.StartupGrace}
 	if cfg.Control.BaseURL != "" {
 		r.PlayController = &runner.HTTPPlayController{BaseURL: cfg.Control.BaseURL, Token: cfg.Control.Token, StartPath: cfg.Control.StartPath, StopPath: cfg.Control.StopPath, Metrics: reg}
@@ -165,6 +209,89 @@ func main() {
 		}
 	}
 	metrics.PrintSummary(os.Stdout, report, detailPath)
+}
+
+func detailPath(cfg config.Config) string {
+	if cfg.Report.DetailCSV != "" {
+		return cfg.Report.DetailCSV
+	}
+	if cfg.Report.CSV != "" {
+		return metrics.DetailCSVPath(cfg.Report.CSV)
+	}
+	return ""
+}
+
+func writeReports(cfg config.Config, report metrics.Report) {
+	if cfg.Report.JSON != "" {
+		if err := metrics.WriteJSON(cfg.Report.JSON, report); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if cfg.Report.CSV != "" {
+		if err := metrics.WriteCSV(cfg.Report.CSV, report); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if path := detailPath(cfg); path != "" {
+		if err := metrics.WriteDetailCSV(path, report); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if cfg.Report.ResourcesCSV != "" {
+		if err := metrics.WriteResourceCSV(cfg.Report.ResourcesCSV, report.ResourceSamples); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if cfg.Report.Markdown != "" {
+		if err := metrics.WriteMarkdown(cfg.Report.Markdown, report); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func monitoringQueries(q config.PrometheusQueries) map[string]string {
+	result := map[string]string{}
+	values := map[string]string{"wvpCpu": q.WVPCPU, "jvmHeap": q.JVMHeap, "jvmGcPause": q.JVMCGPause, "wvpHttp": q.WVPHTTP, "wvpThreadActive": q.WVPThreadActive, "wvpThreadQueue": q.WVPThreadQueue, "redisCpu": q.RedisCPU, "redisMemory": q.RedisMemory, "redisConnections": q.RedisConnections, "mysqlConnections": q.MySQLConnections, "mysqlThreads": q.MySQLThreads, "mysqlSlowQueries": q.MySQLSlowQueries, "hostCpu": q.HostCPU, "hostMemory": q.HostMemory, "hostNetwork": q.HostNetwork, "hostFileDescriptors": q.HostFileDescriptors}
+	for key, value := range values {
+		if strings.TrimSpace(value) != "" {
+			result[key] = value
+		}
+	}
+	if len(result) == 0 {
+		result = map[string]string{
+			"wvpCpu":           "process_cpu_usage * 100",
+			"jvmHeap":          "jvm_memory_used_bytes / jvm_memory_max_bytes * 100",
+			"hostCpu":          "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100",
+			"hostNetwork":      "sum(rate(node_network_receive_bytes_total[1m]))",
+			"redisCpu":         "rate(redis_cpu_sys_seconds_total[1m]) * 100",
+			"redisMemory":      "redis_memory_used_bytes",
+			"redisConnections": "redis_connected_clients",
+			"mysqlConnections": "mysql_global_status_threads_connected",
+		}
+	}
+	return result
+}
+
+func finalizeMonitoring(report *metrics.Report, slo config.SLOConfig, zlmRequired bool) {
+	report.Resources = metrics.SummarizeResources(report.ResourceSamples)
+	for _, sample := range report.ResourceSamples {
+		if sample.Source == "zlm" && sample.ZLM != nil {
+			report.ZLM.Available = report.ZLM.Available || sample.ZLM.Available
+			if sample.ZLM.TotalStreams > report.ZLM.PeakStreams {
+				report.ZLM.PeakStreams = sample.ZLM.TotalStreams
+			}
+			report.ZLM.MediaServerID = sample.ZLM.MediaServerID
+			if sample.Metric == "final_streams" {
+				report.ZLM.ResidualStreams = sample.ZLM.BusinessStreams
+				report.ZLM.ResidualAvailable = sample.ZLM.Available
+			}
+			if !sample.ZLM.Available {
+				report.ZLM.APIErrorCount++
+			}
+		}
+	}
+	input := metrics.SLOInput{Business: report.Business, Resources: report.Resources, ZLMAvailable: !zlmRequired || report.ZLM.Available, ResidualStreams: report.ZLM.ResidualStreams, ResidualStreamsAvailable: !zlmRequired || report.ZLM.ResidualAvailable, MonitoringComplete: len(report.ResourceSamples) > 0, SLO: metrics.SLOThresholds{RegisterSuccessRate: slo.RegisterSuccessRate, CatalogSuccessRate: slo.CatalogSuccessRate, PlaySuccessRate: slo.PlaySuccessRate, MediaSuccessRate: slo.MediaSuccessRate, StopSuccessRate: slo.StopSuccessRate, ControlLatencyP95Seconds: slo.ControlLatencyP95Seconds, ControlLatencyP99Seconds: slo.ControlLatencyP99Seconds, MaxResidualSessions: slo.MaxResidualSessions, MaxResidualStreams: slo.MaxResidualStreams, MaxCPUPercent: slo.MaxCPUPercent, MaxJVMHeapPercent: slo.MaxJVMHeapPercent, MaxRedisCPUPercent: slo.MaxRedisCPUPercent, MaxNetworkPercent: slo.MaxNetworkPercent}}
+	report.Summary = metrics.EvaluateSLO(input)
 }
 
 func startMetricsServer(address string, registry *metrics.Registry) *http.Server {

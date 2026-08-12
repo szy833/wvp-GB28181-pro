@@ -31,6 +31,7 @@ type DeviceEvent struct {
 	DeviceID  string
 	ChannelID string
 	Error     string
+	At        time.Time
 }
 type EventSink interface{ OnDeviceEvent(DeviceEvent) }
 type DeviceHooks struct {
@@ -103,7 +104,7 @@ func (d *Device) emit(name, channelID, errText string) {
 	sink := d.eventSink
 	d.eventMu.RUnlock()
 	if sink != nil {
-		sink.OnDeviceEvent(DeviceEvent{Name: name, DeviceID: d.Identity.DeviceID, ChannelID: channelID, Error: errText})
+		sink.OnDeviceEvent(DeviceEvent{Name: name, DeviceID: d.Identity.DeviceID, ChannelID: channelID, Error: errText, At: time.Now()})
 	}
 }
 func (d *Device) State() State       { d.mu.Lock(); defer d.mu.Unlock(); return d.state }

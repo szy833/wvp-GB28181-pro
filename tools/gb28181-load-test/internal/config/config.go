@@ -75,10 +75,12 @@ type MediaConfig struct {
 }
 
 type ReportConfig struct {
-	JSON      string `yaml:"json" json:"json"`
-	CSV       string `yaml:"csv" json:"csv"`
-	DetailCSV string `yaml:"detailCsv" json:"detailCsv"`
-	Addr      string `yaml:"addr" json:"addr"`
+	JSON         string `yaml:"json" json:"json"`
+	CSV          string `yaml:"csv" json:"csv"`
+	DetailCSV    string `yaml:"detailCsv" json:"detailCsv"`
+	ResourcesCSV string `yaml:"resourcesCsv" json:"resourcesCsv"`
+	Markdown     string `yaml:"markdown" json:"markdown"`
+	Addr         string `yaml:"addr" json:"addr"`
 }
 
 // MonitoringConfig controls optional Prometheus and ZLM observation. It is

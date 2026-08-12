@@ -10,19 +10,35 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/shizy/gb28181-load-test/internal/monitoring"
 )
 
 type Report struct {
-	RunID       string             `json:"runId"`
-	StartedAt   time.Time          `json:"startedAt"`
-	FinishedAt  time.Time          `json:"finishedAt"`
-	DeviceCount int                `json:"deviceCount"`
-	Config      ConfigSummary      `json:"config"`
-	Stages      []Stage            `json:"stages"`
-	Devices     []DeviceResult     `json:"devices"`
-	Plays       []PlayResult       `json:"plays"`
-	Errors      map[string]int     `json:"errors"`
-	Metrics     map[string]float64 `json:"metrics"`
+	RunID           string                      `json:"runId"`
+	StartedAt       time.Time                   `json:"startedAt"`
+	FinishedAt      time.Time                   `json:"finishedAt"`
+	DeviceCount     int                         `json:"deviceCount"`
+	Config          ConfigSummary               `json:"config"`
+	Stages          []Stage                     `json:"stages"`
+	Devices         []DeviceResult              `json:"devices"`
+	Plays           []PlayResult                `json:"plays"`
+	Errors          map[string]int              `json:"errors"`
+	Metrics         map[string]float64          `json:"metrics"`
+	Summary         Verdict                     `json:"summary"`
+	Business        BusinessSummary             `json:"business"`
+	Resources       map[string]ResourceSummary  `json:"resources,omitempty"`
+	ZLM             ZLMReport                   `json:"zlm,omitempty"`
+	ResourceSamples []monitoring.ResourceSample `json:"resourceSamples,omitempty"`
+}
+
+type ZLMReport struct {
+	Available         bool   `json:"available"`
+	ResidualAvailable bool   `json:"residualAvailable"`
+	PeakStreams       int    `json:"peakStreams"`
+	ResidualStreams   int    `json:"residualStreams"`
+	APIErrorCount     int    `json:"apiErrors"`
+	MediaServerID     string `json:"mediaServerId,omitempty"`
 }
 
 type ConfigSummary struct {
@@ -64,18 +80,23 @@ type DeviceResult struct {
 	Errors             []string `json:"errors,omitempty"`
 }
 type PlayResult struct {
-	ID                  string    `json:"id"`
-	DeviceID            string    `json:"deviceId"`
-	ChannelID           string    `json:"channelId"`
-	StartedAt           time.Time `json:"startedAt"`
-	FinishedAt          time.Time `json:"finishedAt"`
-	StartSuccess        bool      `json:"startSuccess"`
-	StartError          string    `json:"startError,omitempty"`
-	StartLatencySeconds float64   `json:"startLatencySeconds"`
-	StopAttempted       bool      `json:"stopAttempted"`
-	StopSuccess         bool      `json:"stopSuccess"`
-	StopError           string    `json:"stopError,omitempty"`
-	StopLatencySeconds  float64   `json:"stopLatencySeconds,omitempty"`
+	ID                              string    `json:"id"`
+	DeviceID                        string    `json:"deviceId"`
+	ChannelID                       string    `json:"channelId"`
+	StartedAt                       time.Time `json:"startedAt"`
+	FinishedAt                      time.Time `json:"finishedAt"`
+	StartSuccess                    bool      `json:"startSuccess"`
+	StartError                      string    `json:"startError,omitempty"`
+	StartLatencySeconds             float64   `json:"startLatencySeconds"`
+	InviteAt                        time.Time `json:"inviteAt,omitempty"`
+	InviteLatencySeconds            float64   `json:"inviteLatencySeconds,omitempty"`
+	MediaAt                         time.Time `json:"mediaAt,omitempty"`
+	MediaConfirmationLatencySeconds float64   `json:"mediaConfirmationLatencySeconds,omitempty"`
+	StopAttempted                   bool      `json:"stopAttempted"`
+	StopSuccess                     bool      `json:"stopSuccess"`
+	StopError                       string    `json:"stopError,omitempty"`
+	StopLatencySeconds              float64   `json:"stopLatencySeconds,omitempty"`
+	StopStartedAt                   time.Time `json:"stopStartedAt,omitempty"`
 }
 
 func normalize(report *Report) {
@@ -137,21 +158,28 @@ func WriteDetailCSV(path string, report Report) error {
 	}
 	defer f.Close()
 	w := csv.NewWriter(f)
-	if err := w.Write([]string{"type", "id", "deviceId", "channelId", "created", "started", "registerRequests", "registerChallenges", "registerSuccess", "catalogSuccess", "inviteSuccess", "mediaStarted", "deviceBye", "deviceByeSent", "startSuccess", "startError", "startLatencySeconds", "stopAttempted", "stopSuccess", "stopError", "stopLatencySeconds", "errors"}); err != nil {
+	if err := w.Write([]string{"type", "id", "deviceId", "channelId", "created", "started", "registerRequests", "registerChallenges", "registerSuccess", "catalogSuccess", "inviteSuccess", "mediaStarted", "deviceBye", "deviceByeSent", "startSuccess", "startError", "startLatencySeconds", "inviteAt", "inviteLatencySeconds", "mediaAt", "mediaConfirmationLatencySeconds", "stopAttempted", "stopStartedAt", "stopSuccess", "stopError", "stopLatencySeconds", "errors"}); err != nil {
 		return err
 	}
 	for _, d := range report.Devices {
-		if err := w.Write([]string{"device", "", d.DeviceID, d.ChannelID, fmt.Sprint(d.Created), fmt.Sprint(d.Started), fmt.Sprint(d.RegisterRequests), fmt.Sprint(d.RegisterChallenges), fmt.Sprint(d.RegisterSuccess), fmt.Sprint(d.CatalogSuccess), fmt.Sprint(d.InviteSuccess), fmt.Sprint(d.MediaStarted), fmt.Sprint(d.DeviceBye), fmt.Sprint(d.DeviceByeSent), "", "", "", "", "", "", "", strings.Join(d.Errors, " | ")}); err != nil {
+		if err := w.Write([]string{"device", "", d.DeviceID, d.ChannelID, fmt.Sprint(d.Created), fmt.Sprint(d.Started), fmt.Sprint(d.RegisterRequests), fmt.Sprint(d.RegisterChallenges), fmt.Sprint(d.RegisterSuccess), fmt.Sprint(d.CatalogSuccess), fmt.Sprint(d.InviteSuccess), fmt.Sprint(d.MediaStarted), fmt.Sprint(d.DeviceBye), fmt.Sprint(d.DeviceByeSent), "", "", "", "", "", "", "", "", "", "", "", "", strings.Join(d.Errors, " | ")}); err != nil {
 			return err
 		}
 	}
 	for _, p := range report.Plays {
-		if err := w.Write([]string{"play", p.ID, p.DeviceID, p.ChannelID, "", "", "", "", "", "", "", "", "", "", fmt.Sprint(p.StartSuccess), p.StartError, fmt.Sprintf("%.3f", p.StartLatencySeconds), fmt.Sprint(p.StopAttempted), fmt.Sprint(p.StopSuccess), p.StopError, fmt.Sprintf("%.3f", p.StopLatencySeconds), ""}); err != nil {
+		if err := w.Write([]string{"play", p.ID, p.DeviceID, p.ChannelID, "", "", "", "", "", "", "", "", "", "", fmt.Sprint(p.StartSuccess), p.StartError, fmt.Sprintf("%.3f", p.StartLatencySeconds), formatOptionalTime(p.InviteAt), fmt.Sprintf("%.3f", p.InviteLatencySeconds), formatOptionalTime(p.MediaAt), fmt.Sprintf("%.3f", p.MediaConfirmationLatencySeconds), fmt.Sprint(p.StopAttempted), formatOptionalTime(p.StopStartedAt), fmt.Sprint(p.StopSuccess), p.StopError, fmt.Sprintf("%.3f", p.StopLatencySeconds), ""}); err != nil {
 			return err
 		}
 	}
 	w.Flush()
 	return w.Error()
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339Nano)
 }
 
 func DetailCSVPath(summaryPath string) string {

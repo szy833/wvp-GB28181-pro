@@ -96,6 +96,9 @@ func (s *PlayScheduler) runOne(ctx context.Context, wg *sync.WaitGroup, sem chan
 		}
 	} else {
 		result.StartSuccess = true
+		if s.Metrics != nil {
+			s.Metrics.Counter("play_start_success_total", 1)
+		}
 	}
 	result.StartLatencySeconds = time.Since(started).Seconds()
 	if result.StartSuccess && s.Duration > 0 {
@@ -107,6 +110,7 @@ func (s *PlayScheduler) runOne(ctx context.Context, wg *sync.WaitGroup, sem chan
 			result.StopAttempted = false
 		case <-timer.C:
 			stopStarted := time.Now()
+			result.StopStartedAt = stopStarted
 			if err := s.Controller.Stop(ctx, target); err != nil {
 				result.StopError = err.Error()
 				if s.Metrics != nil {
@@ -114,8 +118,14 @@ func (s *PlayScheduler) runOne(ctx context.Context, wg *sync.WaitGroup, sem chan
 				}
 			} else {
 				result.StopSuccess = true
+				if s.Metrics != nil {
+					s.Metrics.Counter("play_stop_success_total", 1)
+				}
 			}
 			result.StopLatencySeconds = time.Since(stopStarted).Seconds()
+			if s.Metrics != nil {
+				s.Metrics.Observe("stop_latency_seconds", result.StopLatencySeconds)
+			}
 		}
 	}
 	result.FinishedAt = time.Now()
