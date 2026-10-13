@@ -15,11 +15,19 @@ public interface IInviteStreamService {
     /**
      * 更新点播的状态信息
      */
-    void updateInviteInfo(InviteInfo inviteInfo);
+    com.genersoft.iot.vmp.common.InviteWriteResult updateInviteInfo(InviteInfo inviteInfo);
 
-    void updateInviteInfo(InviteInfo inviteInfo, Long time);
+    com.genersoft.iot.vmp.common.InviteWriteResult updateInviteInfo(InviteInfo inviteInfo, Long time);
 
-    InviteInfo updateInviteInfoForStream(InviteInfo inviteInfo, String stream);
+    com.genersoft.iot.vmp.common.InviteWriteResult createInvite(InviteInfo inviteInfo);
+    InviteInfo getById(String inviteId);
+    InviteInfo getByCallId(String callId);
+    InviteInfo recordSipReady(InviteInfo invite, String callId);
+    InviteInfo recordMediaArrival(InviteInfo invite, StreamInfo streamInfo);
+    InviteInfo activate(InviteInfo invite);
+    void await(InviteInfo invite, ErrorCallback<StreamInfo> callback);
+    void complete(InviteInfo invite, int code, String msg, StreamInfo streamInfo);
+
 
     /**
      * 获取点播的状态信息
@@ -36,39 +44,21 @@ public interface IInviteStreamService {
     void removeInviteInfo(InviteInfo inviteInfo);
 
     /**
-     * Removes an InviteInfo only when the Redis hash still contains the expected owner.
+     * 按不可变 Invite 身份进入完整停止流程，不能仅删除元数据。
      */
     boolean removeInviteInfoIfSame(InviteInfo expected);
 
-    /**
-     * Restores an owner snapshot only when its Redis hash field is still absent.
-     */
-    boolean restoreInviteInfoIfAbsent(InviteInfo inviteInfo);
     /**
      * 移除点播的状态信息
      */
     void removeInviteInfoByDeviceAndChannel(InviteSessionType inviteSessionType, Integer channelId);
 
-    List<InviteInfo> getAllInviteInfo();
 
     /**
      * Returns active InviteInfo records whose current primary record belongs to the specified media node.
      */
     List<InviteInfo> getActiveInviteInfoByMediaServer(String mediaServerId);
 
-    boolean inviteIndexesReady();
-
-    boolean inviteIndexesBackfilled();
-
-    /**
-     * Builds derived indexes without enabling index-only reads.
-     */
-    boolean rebuildInviteIndexes();
-
-    /**
-     * Enables index-only reads after all legacy writers have been removed from service.
-     */
-    boolean activateInviteIndexes();
 
     /**
      * 获取点播的状态信息
@@ -85,16 +75,6 @@ public interface IInviteStreamService {
      */
     InviteInfo getInviteInfoByStreamAndMediaServer(String mediaServerId, String stream);
 
-
-    /**
-     * 添加一个invite回调
-     */
-    void once(InviteSessionType type, Integer channelId, String stream,  ErrorCallback<StreamInfo> callback);
-
-    /**
-     * 调用一个invite回调
-     */
-    void call(InviteSessionType type,  Integer channelId, String stream,  int code, String msg, StreamInfo data);
 
     /**
      * 清空一个设备的所有invite信息

@@ -145,6 +145,8 @@ public interface ISIPCommanderForPlatform {
 
     void streamByeCmd(Platform platform, CommonGBChannel channel, String app, String stream, String callId, SipSubscribe.Event okEvent) throws InvalidArgumentException, SipException, ParseException, SsrcTransactionNotFoundException;
 
+    void streamByeCmd(Platform platform, CommonGBChannel channel, com.genersoft.iot.vmp.gb28181.bean.SipTransactionInfo dialog, SipSubscribe.Event acknowledged) throws InvalidArgumentException, SipException, ParseException;
+
     void broadcastInviteCmd(Platform platform, CommonGBChannel channel, String sourceId,  MediaServer mediaServerItem,
                             SSRCInfo ssrcInfo, SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent) throws ParseException, SipException, InvalidArgumentException;
 

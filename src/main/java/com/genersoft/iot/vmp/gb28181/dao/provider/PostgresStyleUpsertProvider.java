@@ -11,14 +11,14 @@ public class PostgresStyleUpsertProvider {
                 "address, parental, parent_id, safety_way, register_way, cert_num, certifiable, err_code, end_time, secrecy, " +
                 "ip_address, port, password, status, longitude, latitude, ptz_type, position_type, room_type, use_type, " +
                 "supply_light_type, direction_type, resolution, business_group_id, download_speed, svc_space_support_mod, " +
-                "svc_time_support_mode, create_time, update_time, sub_count, stream_id, has_audio, gps_time, stream_identification, channel_type" +
+                "svc_time_support_mode, create_time, update_time, sub_count, has_audio, gps_time, stream_identification, channel_type" +
                 ") VALUES " +
                 "<foreach collection='channels' item='item' separator=','>" +
                 "(#{item.deviceId}, #{item.dataType}, #{item.dataDeviceId}, #{item.name}, #{item.manufacturer}, #{item.model}, #{item.owner}, #{item.civilCode}, #{item.block}, " +
                 "#{item.address}, #{item.parental}, #{item.parentId}, #{item.safetyWay}, #{item.registerWay}, #{item.certNum}, #{item.certifiable}, #{item.errCode}, #{item.endTime}, #{item.secrecy}, " +
                 "#{item.ipAddress}, #{item.port}, #{item.password}, #{item.status}, #{item.longitude}, #{item.latitude}, #{item.ptzType}, #{item.positionType}, #{item.roomType}, #{item.useType}, " +
                 "#{item.supplyLightType}, #{item.directionType}, #{item.resolution}, #{item.businessGroupId}, #{item.downloadSpeed}, #{item.svcSpaceSupportMod}," +
-                " #{item.svcTimeSupportMode}, #{item.createTime}, #{item.updateTime}, #{item.subCount}, #{item.streamId}, #{item.hasAudio}, #{item.gpsTime}, #{item.streamIdentification}, #{item.channelType})" +
+                " #{item.svcTimeSupportMode}, #{item.createTime}, #{item.updateTime}, #{item.subCount}, #{item.hasAudio}, #{item.gpsTime}, #{item.streamIdentification}, #{item.channelType})" +
                 "</foreach>" +
                 "ON CONFLICT (data_device_id, device_id) DO UPDATE SET " +
                 "name=EXCLUDED.name, manufacturer=EXCLUDED.manufacturer, model=EXCLUDED.model, owner=EXCLUDED.owner, " +
@@ -35,7 +35,7 @@ public class PostgresStyleUpsertProvider {
                 "svc_space_support_mod=EXCLUDED.svc_space_support_mod, " +
                 "svc_time_support_mode=EXCLUDED.svc_time_support_mode, " +
                 "update_time=EXCLUDED.update_time, sub_count=EXCLUDED.sub_count, " +
-                "stream_id=EXCLUDED.stream_id, has_audio=EXCLUDED.has_audio, " +
+                "has_audio=EXCLUDED.has_audio, " +
                 "gps_time=EXCLUDED.gps_time, stream_identification=EXCLUDED.stream_identification, " +
                 "channel_type=EXCLUDED.channel_type" +
                 "</script>";

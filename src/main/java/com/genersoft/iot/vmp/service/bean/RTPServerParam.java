@@ -36,6 +36,8 @@ public class RTPServerParam {
      */
     private Integer tcpMode;
     private SsrcLease ssrcLease;
+    private String resourceId;
+    private String listenerStreamId;
 
     public RTPServerParam(MediaServer mediaServer, String app, String streamId, Long ssrc, Integer port,
                           boolean onlyAuto, boolean disableAudio, boolean reUsePort, Integer tcpMode) {

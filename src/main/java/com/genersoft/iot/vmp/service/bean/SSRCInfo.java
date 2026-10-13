@@ -12,6 +12,12 @@ public class SSRCInfo {
     private String resourceId;
     private String zlmStream;
     private String mediaServerId;
+    private String inviteId;
+    private String leaseId;
+    private String allocatedSsrc;
+
+    public SSRCInfo() {
+    }
 
     public SSRCInfo(int port, String ssrc, String app, String stream) {
         this.port = port;

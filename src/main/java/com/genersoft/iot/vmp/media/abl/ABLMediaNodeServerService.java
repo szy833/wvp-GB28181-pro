@@ -189,6 +189,13 @@ public class ABLMediaNodeServerService implements IMediaNodeServerService {
     }
 
     @Override
+    public Boolean probeStream(MediaServer node, String app, String stream) {
+        ABLResult result = ablresTfulUtils.getMediaList(node, app, stream, 2);
+        if (result == null || result.getCode() != 0) return null;
+        return result.getMediaList() != null && !result.getMediaList().isEmpty();
+    }
+
+    @Override
     public MediaStreamCountResult countActiveStreams(MediaServer mediaServer) {
         final ABLResult result;
         try {

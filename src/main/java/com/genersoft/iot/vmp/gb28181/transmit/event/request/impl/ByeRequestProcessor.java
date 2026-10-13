@@ -193,6 +193,12 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 			}
 		}
 		// 可能是设备发送的停止
+		InviteInfo managed = inviteStreamService.getByCallId(callId);
+		if (managed != null) {
+			inviteStreamService.complete(managed, InviteErrorCode.ERROR_FOR_FINISH.getCode(), "Device BYE", null);
+			playService.stopAfterDeviceBye(managed);
+			return;
+		}
 		SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByCallId(callId);
 		if (ssrcTransaction == null) {
 			log.warn("[收到BYE] 未找到SIP会话关联：callId={}", callId);
@@ -201,9 +207,22 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 		log.info("[收到BYE] 会话关联 deviceId={}, channelId={}, type={}, stream={}, mediaServerId={}, callId={}",
 				ssrcTransaction.getDeviceId(), ssrcTransaction.getChannelId(), ssrcTransaction.getType(),
 				ssrcTransaction.getStream(), ssrcTransaction.getMediaServerId(), callId);
-		// TODO 结束点播 避免等待
+		if (ssrcTransaction.getInviteId() != null) {
+			InviteInfo invite = inviteStreamService.getById(ssrcTransaction.getInviteId());
+			if (invite != null && java.util.Objects.equals(callId, invite.getCallId())) {
+				inviteStreamService.complete(invite, InviteErrorCode.ERROR_FOR_FINISH.getCode(), "Device BYE", null);
+				playService.stopAfterDeviceBye(invite);
+			} else {
+				log.error("[收到BYE] Invite身份无法确认，保留精确会话供对账：inviteId={}, callId={}", ssrcTransaction.getInviteId(), callId);
+			}
+			return;
+		}
+		if (ssrcTransaction.getType() == InviteSessionType.PLAY || ssrcTransaction.getType() == InviteSessionType.PLAYBACK
+				|| ssrcTransaction.getType() == InviteSessionType.DOWNLOAD) {
+			log.error("[收到BYE] 接收会话缺少inviteId，禁止按SSRC或业务流猜测关闭：callId={}", callId);
+			return;
+		}
 
-		boolean rtpClosed = false;
 		try {
 			if (ssrcTransaction.getPlatformId() != null ) {
 				Platform platform = platformService.queryPlatformByServerGBId(ssrcTransaction.getPlatformId());
@@ -234,45 +253,6 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 					return;
 				}
 				switch (ssrcTransaction.getType()){
-					case PLAY:
-					case PLAYBACK:
-					case DOWNLOAD:
-						try {
-							InviteInfo inviteInfo = inviteStreamService.getInviteInfoByDeviceAndChannel(ssrcTransaction.getType(), channel.getId());
-							if (inviteInfo != null) {
-								SSRCInfo inviteSsrc = inviteInfo.getSsrcInfo();
-								log.info("[收到BYE] 命中InviteInfo：type={}, status={}, stream={}, mediaServerId={}, "
-										+ "ssrc={}, resourceId={}, zlmStream={}, streamInfo={}",
-										ssrcTransaction.getType(), inviteInfo.getStatus(), inviteInfo.getStream(), inviteInfo.getMediaServerId(),
-										inviteSsrc == null ? null : inviteSsrc.getSsrc(),
-										inviteSsrc == null ? null : inviteSsrc.getResourceId(),
-										inviteSsrc == null ? null : inviteSsrc.getZlmStream(), inviteInfo.getStreamInfo());
-								inviteStreamService.call(ssrcTransaction.getType(), channel.getId(), null,
-													InviteErrorCode.ERROR_FOR_FINISH.getCode(),
-													InviteErrorCode.ERROR_FOR_FINISH.getMsg(), null);
-								deviceChannelService.stopPlay(channel.getId());
-								inviteStreamService.removeInviteInfo(inviteInfo);
-								if (inviteInfo.getSsrcInfo() != null) {
-									SSRCInfo inviteSsrcInfo = inviteInfo.getSsrcInfo();
-									rtpClosed = receiveRtpServerService.closeRtpResource(inviteSsrcInfo)
-											|| inviteSsrcInfo.getResourceId() != null;
-								} else if (inviteInfo.getStreamInfo() != null) {
-									receiveRtpServerService.closeRTPServerByBusinessStream(
-											inviteInfo.getStreamInfo().getMediaServer(),
-											inviteInfo.getStreamInfo().getApp(), inviteInfo.getStreamInfo().getStream());
-									// No SSRC is available here, so the business-only
-									// attempt is the complete safe cleanup target.
-									rtpClosed = true;
-								}
-							} else {
-								log.warn("[收到BYE] 未找到InviteInfo：type={}, deviceId={}, channelId={}, stream={}, callId={}",
-										ssrcTransaction.getType(), ssrcTransaction.getDeviceId(), channel.getId(),
-										ssrcTransaction.getStream(), callId);
-								}
-						} catch (Exception e) {
-							log.error("[BYE处理] 清理Invite异常: type={}, channelId={}", ssrcTransaction.getType(), channel.getId(), e);
-						}
-						break;
 					case BROADCAST:
 						// 广播使用 AudioBroadcastManager 维护的发送资源。
 						Device sourceDevice = deviceService.getDeviceByChannelId(ssrcTransaction.getChannelId());
@@ -308,27 +288,7 @@ public class ByeRequestProcessor extends SIPRequestProcessorParent implements In
 			} catch (Exception e) {
 				log.warn("[BYE处理] 删除SIP会话失败: callId={}", ssrcTransaction.getCallId(), e);
 			}
-			if (!rtpClosed && (ssrcTransaction.getType() == InviteSessionType.PLAY
-					|| ssrcTransaction.getType() == InviteSessionType.PLAYBACK
-					|| ssrcTransaction.getType() == InviteSessionType.DOWNLOAD)
-					&& ssrcTransaction.getMediaServerId() != null
-					&& ssrcTransaction.getApp() != null
-					&& ssrcTransaction.getStream() != null) {
-				try {
-					MediaServer mediaServer = mediaServerService.getOne(ssrcTransaction.getMediaServerId());
-					if (mediaServer != null && mediaServer.isRtpEnable() && ssrcTransaction.getSsrc() != null) {
-						receiveRtpServerService.closeRTPServerBySsrcId(
-								ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getSsrc());
-					}
-					// Listener and published stream are separate targets. The
-					// business stream must be released even when listener close hits.
-					receiveRtpServerService.closeRTPServerByBusinessStreamIfUnowned(
-							mediaServer, ssrcTransaction.getApp(), ssrcTransaction.getStream());
-				} catch (Exception e) {
-					log.warn("[BYE处理] 兜底关闭RTP失败: mediaServerId={}, app={}, stream={}",
-							ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getStream(), e);
-				}
-			}
+
 		}
 	}
 }

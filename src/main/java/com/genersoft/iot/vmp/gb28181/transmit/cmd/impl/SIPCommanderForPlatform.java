@@ -51,6 +51,17 @@ import java.util.stream.Collectors;
 public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
 
     @Autowired
+    private com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository inviteRepository;
+
+    @Override
+    public void streamByeCmd(Platform platform, CommonGBChannel channel, com.genersoft.iot.vmp.gb28181.bean.SipTransactionInfo dialog, SipSubscribe.Event acknowledged)
+            throws InvalidArgumentException, SipException, ParseException {
+        Request request = headerProviderPlatformProvider.createByteRequest(platform, channel.getGbDeviceId(), dialog);
+        sipSender.transmitRequest(sipLayer.getLocalIp(platform.getDeviceIp()), request,
+                event -> { if (event.statusCode == 481 && acknowledged != null) acknowledged.response(event); }, acknowledged);
+    }
+
+    @Autowired
     private SIPRequestHeaderPlarformProvider headerProviderPlatformProvider;
 
     @Autowired
@@ -741,6 +752,10 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
         Request request = headerProviderPlatformProvider.createInviteRequest(platform, sourceId, channel.getGbDeviceId(),
                 content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(),  ssrcInfo.getSsrc(),
                 callIdHeader);
+        inviteRepository.patch(ssrcInfo.getInviteId(), "sip-intent", invite -> {
+            invite.setCallId(callIdHeader.getCallId());
+            invite.setSipSent(true);
+        }).requireApplied();
         sipSender.transmitRequest(sipLayer.getLocalIp(platform.getDeviceIp()), request, (e -> {
             sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
             errorEvent.response(e);
@@ -749,7 +764,8 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
             SIPResponse response = (SIPResponse) responseEvent.getResponse();
             SsrcTransaction ssrcTransaction = SsrcTransaction.buildForPlatform(platform.getServerGBId(), channel.getGbId(),
                     callIdHeader.getCallId(), ssrcInfo.getApp(),  stream, ssrcInfo.getSsrc(), mediaServer.getId(), response, InviteSessionType.BROADCAST);
-            sessionManager.put(ssrcTransaction);
+            ssrcTransaction.setInviteId(ssrcInfo.getInviteId());
+            if (!InviteSipSessionCommitter.confirm(inviteRepository, sessionManager, ssrcTransaction, errorEvent)) return;
             okEvent.response(e);
         });
     }

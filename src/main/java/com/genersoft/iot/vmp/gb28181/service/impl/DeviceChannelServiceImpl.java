@@ -347,16 +347,6 @@ public class DeviceChannelServiceImpl implements IDeviceChannelService {
     }
 
     @Override
-    public void startPlay(Integer channelId, String stream) {
-        channelMapper.startPlay(channelId, stream);
-    }
-
-    @Override
-    public void stopPlay(Integer channelId) {
-        channelMapper.stopPlayById(channelId);
-    }
-
-    @Override
     public void cleanChannelsForDevice(int deviceId) {
         channelMapper.cleanChannelsByDeviceId(deviceId);
     }

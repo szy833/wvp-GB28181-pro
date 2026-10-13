@@ -145,6 +145,7 @@ class SipInviteSessionManagerTest {
         ValueOperations<String, Object> values = mock(ValueOperations.class);
         SsrcTransaction replacement = transaction("replacement-call", "device-1", "app", "stream-1");
         replacement.setSsrc("new-ssrc");
+        replacement.setExpireAt(Long.MAX_VALUE);
         when(redis.opsForValue()).thenReturn(values);
         when(values.get(any())).thenAnswer(invocation -> {
             String key = invocation.getArgument(0);

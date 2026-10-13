@@ -314,11 +314,7 @@ public class ChannelController {
         result.onTimeout(() -> {
             log.info("[通用通道点播] 等待超时 channelId: {}", channelId);
             result.setResult(WVPResult.fail(ErrorCode.ERROR100.getCode(), "点播超时"));
-            try {
-                channelPlayService.stopPlay(channel);
-            } catch (RuntimeException e) {
-                log.warn("[通用通道点播] 超时停止流程失败，channelId={}: {}", channelId, e.getMessage());
-            }
+            // HTTP 等待结束不代表共享播放 owner 应停止，建立超时由生命周期任务收尾。
         });
 
         ErrorCallback<StreamInfo> callback = (code, msg, streamInfo) -> {
@@ -447,11 +443,6 @@ public class ChannelController {
         result.onTimeout(() -> {
             log.info("[通用通道回放] 等待超时 channelId: {}", channelId);
             result.setResult(WVPResult.fail(ErrorCode.ERROR100.getCode(), "回放超时"));
-            try {
-                channelPlayService.stopPlayback(channel, null);
-            } catch (RuntimeException e) {
-                log.warn("[通用通道回放] 超时停止流程失败，channelId={}: {}", channelId, e.getMessage());
-            }
         });
 
         ErrorCallback<StreamInfo> callback = (code, msg, streamInfo) -> {

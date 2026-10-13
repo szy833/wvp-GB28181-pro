@@ -50,6 +50,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
     private final static String TIMEOUT_TASK_KEY_PREFIX = "RTP_SERVER_TIMEOUT_TASK";
     private final ConcurrentHashMap<String, RtpResourceContext> activeResources = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RtpResourceContext> resourceOwners = new ConcurrentHashMap<>();
+    private final java.util.Set<String> openingResources = ConcurrentHashMap.newKeySet();
     private static final DefaultRedisScript<Long> AUTH_COMPARE_DELETE = new DefaultRedisScript<>(
             "if redis.call('get', KEYS[2]) == ARGV[1] then "
                     + "redis.call('del', KEYS[1]); redis.call('del', KEYS[2]); return 1; "
@@ -84,6 +85,84 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
 
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
+
+    @Autowired
+    private com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository inviteRepository;
+
+    @Override
+    public SSRCInfo openGbRTPServerForBroadcastInvite(com.genersoft.iot.vmp.common.InviteInfo invite, MediaServer node,
+                                                     Platform platform, CommonGBChannel channel, ErrorCallback<OpenRTPServerResult> callback) {
+        Device transport = new Device();
+        transport.setStreamMode(userSetting.getBroadcastForPlatform());
+        DeviceChannel audio = new DeviceChannel();
+        audio.setHasAudio(true);
+        return openGbRTPServerForInvite(invite, node, transport, audio, null, false, callback);
+    }
+
+    @Override
+    public SSRCInfo openGbRTPServerForInvite(com.genersoft.iot.vmp.common.InviteInfo invite, MediaServer mediaServer,
+                                            Device device, DeviceChannel channel, String presetSsrc, boolean record,
+                                            ErrorCallback<OpenRTPServerResult> callback) {
+        SsrcLease lease = presetSsrc == null ? (invite.getType() == com.genersoft.iot.vmp.common.InviteSessionType.PLAY
+                || invite.getType() == com.genersoft.iot.vmp.common.InviteSessionType.BROADCAST
+                ? ssrcFactory.allocatePlayLease(mediaServer) : ssrcFactory.allocatePlaybackLease(mediaServer)) : null;
+        String ssrc = presetSsrc != null ? presetSsrc : lease == null ? null : lease.getSsrc();
+        if (ssrc == null) { callback.run(InviteErrorCode.ERROR_FOR_SSRC_UNAVAILABLE.getCode(), "SSRC unavailable", null); return null; }
+        Long value = parseSsrcOrRelease(ssrc, lease, callback, "Invite RTP");
+        if (value == null) return null;
+        SSRCInfo info = new SSRCInfo(0, ssrc, MediaStreamUtil.RTP_APP, invite.getStream());
+        info.setInviteId(invite.getInviteId());
+        info.setLeaseId(lease == null ? null : lease.getLeaseId());
+        info.setAllocatedSsrc(ssrc);
+        info.setMediaServerId(mediaServer.getId());
+        info.setResourceId(UUID.randomUUID().toString());
+        info.setZlmStream(mediaServer.isRtpEnable() ? String.format("%08X", value) + "_" + invite.getInviteId().replace("-", "").toUpperCase(Locale.ROOT)
+                : String.format("%08X", value));
+        openingResources.add(info.getResourceId());
+        try {
+            inviteRepository.patch(invite.getInviteId(), "rtp-plan", current -> {
+                current.setSsrcInfo(info);
+                current.setRtpOpening(true);
+            }).requireApplied();
+        } catch (RuntimeException failure) {
+            openingResources.remove(info.getResourceId());
+            ssrcFactory.release(lease);
+            throw failure;
+        }
+        RTPServerParam param = new RTPServerParam(mediaServer, MediaStreamUtil.RTP_APP, info.getStream(), value,
+                null, false, !channel.isHasAudio(), false, "TCP-ACTIVE".equals(device.getStreamMode()) ? 2
+                : "TCP-PASSIVE".equals(device.getStreamMode()) ? 1 : 0);
+        param.setResourceId(info.getResourceId());
+        param.setListenerStreamId(info.getZlmStream());
+        param.setSsrcLease(lease);
+        param.setSsrcCheck(device.isSsrcCheck());
+        param.setOnlyAuto(invite.getType() == com.genersoft.iot.vmp.common.InviteSessionType.BROADCAST);
+        RtpServerOpenResult opened;
+        try {
+            opened = openCommonRTPServerWithHandle(param, (code, message, data) -> {
+                OpenRTPServerResult result = new OpenRTPServerResult();
+                result.setSsrcInfo(info);
+                result.setHookData(data);
+                callback.run(code, message, result);
+            });
+            info.setPort(opened.getPort());
+            var bound = inviteRepository.resourceOpened(invite.getInviteId(), info);
+            if (!bound.applied()) { closeRtpResource(info); throw new IllegalStateException("RTP binding not confirmed"); }
+            if (opened.isSuccess() && !bound.invite().getLifecycle().closing()) {
+                Integer length = invite.getType() == com.genersoft.iot.vmp.common.InviteSessionType.DOWNLOAD
+                        ? (int) (DateUtil.getDifference(invite.getStartTime(), invite.getEndTime()) / 1000) : null;
+                addAuthenticateInfo(opened, info.getZlmStream(), info.getStream(), channel.isHasAudio(), record, length);
+            } else closeRtpResource(info);
+        } finally {
+            openingResources.remove(info.getResourceId());
+        }
+        return info;
+    }
+
+    @Override
+    public boolean isRtpResourceOpening(SSRCInfo resource) {
+        return resource != null && resource.getResourceId() != null && openingResources.contains(resource.getResourceId());
+    }
 
     /**
      * 流到来的处理
@@ -125,6 +204,13 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                     event.getMediaServer().getId(), event.getApp(), event.getStream(), event.getSchema(),
                     event.getOriginUrl());
             return;
+        }
+        if (event.getOriginUrl() == null) {
+            Boolean ready = mediaServerService.probeStream(event.getMediaServer(), event.getApp(), context.getBusinessStreamId());
+            if (!Boolean.FALSE.equals(ready)) {
+                log.warn("[RTP媒体离开] 来源缺失且未确认媒体消失，保留资源：resourceId={}", context.getResourceId());
+                return;
+            }
         }
         com.genersoft.iot.vmp.service.bean.RtpResourceState state = context.getState();
         log.info("[RTP媒体离开] 已匹配资源：resourceId={}, state={}, mediaServer={}, app={}, stream={}, schema={}, originUrl={}",
@@ -570,7 +656,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
         final MediaServer mediaServer = param.getMediaServer();
         final String businessStreamId = param.getStreamId();
         final String zlmStreamId = resolveZlmStreamId(param);
-        final String resourceId = UUID.randomUUID().toString();
+        final String resourceId = param.getResourceId() == null ? UUID.randomUUID().toString() : param.getResourceId();
         final String taskKey = String.format("%s_%s_%s_%s", TIMEOUT_TASK_KEY_PREFIX,
                 mediaServer.getId(), param.getApp(), businessStreamId);
         // on_stream_changed uses the final published stream (stream_replace),
@@ -606,7 +692,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                     }
                 }
             } catch (Exception e) { log.warn("回滚RTP鉴权失败: {}", e.getMessage()); }
-            try { ssrcFactory.release(param.getSsrcLease()); }
+            try { if (param.getResourceId() == null) ssrcFactory.release(param.getSsrcLease()); }
             catch (Exception e) { log.warn("释放SSRC失败: {}", e.getMessage()); }
             if (creationFinished.get()) {
                 activeResources.remove(resourceId, context);
@@ -677,14 +763,14 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                 creationFinished.set(true);
                 if (context.getState() != com.genersoft.iot.vmp.service.bean.RtpResourceState.REGISTERING) {
                     cleanupLateCreation(mediaServer, param.getApp(), zlmStreamId, ownerKey, zlmOwnerKey,
-                            resourceId, context, taskKey, param.getSsrcLease());
+                            resourceId, context, taskKey, param.getSsrcLease(), param.getResourceId() == null);
                     return new RtpServerOpenResult(-1, resourceId, businessStreamId, zlmStreamId, context);
                 }
                 if (!context.markWaitingMedia(port, zlmStreamId)) {
                     // An external close may win between task registration and
                     // the state transition; do not expose a successful port.
                     cleanupLateCreation(mediaServer, param.getApp(), zlmStreamId, ownerKey, zlmOwnerKey,
-                            resourceId, context, taskKey, param.getSsrcLease());
+                            resourceId, context, taskKey, param.getSsrcLease(), param.getResourceId() == null);
                     return new RtpServerOpenResult(-1, resourceId, businessStreamId, zlmStreamId, context);
                 }
                 return new RtpServerOpenResult(port, resourceId, businessStreamId, zlmStreamId, context);
@@ -695,7 +781,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                     context.completeFailure(InviteErrorCode.ERROR_FOR_RESOURCE_EXHAUSTION.getCode(), "开启RTPServer失败", null);
                 } else {
                     cleanupLateCreation(mediaServer, param.getApp(), zlmStreamId, ownerKey, zlmOwnerKey,
-                            resourceId, context, taskKey, param.getSsrcLease());
+                            resourceId, context, taskKey, param.getSsrcLease(), param.getResourceId() == null);
                 }
             } else {
                 creationFinished.set(true);
@@ -703,7 +789,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                     context.completeFailure(InviteErrorCode.FAIL.getCode(), "媒体节点创建RTPServer失败", null);
                 } else {
                     cleanupLateCreation(mediaServer, param.getApp(), zlmStreamId, ownerKey, zlmOwnerKey,
-                            resourceId, context, taskKey, param.getSsrcLease());
+                            resourceId, context, taskKey, param.getSsrcLease(), param.getResourceId() == null);
                 }
             }
             return new RtpServerOpenResult(port, resourceId, businessStreamId, zlmStreamId, context);
@@ -713,13 +799,14 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                 context.completeFailure(InviteErrorCode.FAIL.getCode(), e.getMessage() == null ? "开启RTPServer异常" : e.getMessage(), null);
             } else {
                 cleanupLateCreation(mediaServer, param.getApp(), zlmStreamId, ownerKey, zlmOwnerKey,
-                        resourceId, context, taskKey, param.getSsrcLease());
+                        resourceId, context, taskKey, param.getSsrcLease(), param.getResourceId() == null);
             }
             return new RtpServerOpenResult(-1, resourceId, businessStreamId, zlmStreamId, context);
         }
     }
 
     private String resolveZlmStreamId(RTPServerParam param) {
+        if (param.getListenerStreamId() != null) return param.getListenerStreamId();
         if (param.getMediaServer().isRtpEnable() && param.getSsrc() != null && param.getSsrc() != 0) {
             return String.format("%08x", param.getSsrc()).toUpperCase();
         }
@@ -729,14 +816,14 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
     /** Completes rollback when close/timeout won while the synchronous create call was still running. */
     private void cleanupLateCreation(MediaServer mediaServer, String app, String zlmStreamId,
                                      String ownerKey, String zlmOwnerKey, String resourceId,
-                                     RtpResourceContext context, String taskKey, SsrcLease lease) {
+                                     RtpResourceContext context, String taskKey, SsrcLease lease, boolean ownsLeaseRelease) {
         if (resourceOwners.get(ownerKey) == context) {
             closeOwnedMediaResources(context, mediaServer, app, zlmStreamId,
                     context.getBusinessStreamId(), "late creation cleanup");
         }
         try { context.cleanupRegisteredResources(); }
         catch (Exception e) { log.debug("清理延迟创建任务和Hook失败", e); }
-        try { ssrcFactory.release(lease); }
+        try { if (ownsLeaseRelease) ssrcFactory.release(lease); }
         catch (Exception e) { log.warn("释放延迟创建SSRC失败: {}", e.getMessage()); }
         removeResourceIndexes(resourceId, ownerKey, zlmOwnerKey, context);
     }

@@ -112,16 +112,6 @@ public class PlaybackController {
 			result.setResult(timeoutResult);
 			requestMessage.setData(timeoutResult);
 			resultHolder.invokeResult(requestMessage);
-			try {
-				InviteInfo inviteInfo = inviteStreamService.getInviteInfoByDeviceAndChannel(
-						InviteSessionType.PLAYBACK, channel.getId());
-				if (inviteInfo != null) {
-					playService.stop(inviteInfo);
-				}
-			} catch (RuntimeException e) {
-				log.warn("[录像回放] 超时停止流程失败，deviceId={}, channelId={}: {}",
-						deviceId, channelId, e.getMessage());
-			}
 		});
 		playService.playBack(device, channel, startTime, endTime,
 				(code, msg, data)->{

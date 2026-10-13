@@ -55,6 +55,19 @@ import java.util.List;
 public class SIPCommander implements ISIPCommander {
 
     @Autowired
+    private com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository inviteRepository;
+
+    private void persistInviteIntent(Request request, SSRCInfo resource) {
+        if (resource.getInviteId() == null) throw new IllegalArgumentException("Invite identity required before SIP send");
+        String callId = ((CallIdHeader) request.getHeader(CallIdHeader.NAME)).getCallId();
+        inviteRepository.patch(resource.getInviteId(), "sip-intent", invite -> {
+            if (invite.getCallId() != null && !callId.equals(invite.getCallId())) throw new IllegalStateException("Duplicate INVITE send");
+            invite.setCallId(callId);
+            invite.setSipSent(true);
+        }).requireApplied();
+    }
+
+    @Autowired
     private SipConfig sipConfig;
 
     @Autowired
@@ -209,7 +222,7 @@ public class SIPCommander implements ISIPCommander {
      * @param errorEvent sip错误订阅
      */
     @Override
-    public void playStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
+public void playStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
                               SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
         String stream = ssrcInfo.getStream();
 
@@ -280,6 +293,7 @@ public class SIPCommander implements ISIPCommander {
 //			content.append("f=v/2/6/25/1/4000a/6/8/1" + "\r\n"); // 未发现支持此特性的设备
 
         Request request = headerProvider.createInviteRequest(device, channel.getDeviceId(), content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(), null, ssrcInfo.getSsrc(),sipSender.getNewCallIdHeader(sipLayer.getLocalIp(device.getLocalIp()),device.getTransport()));
+        persistInviteIntent(request, ssrcInfo);
         sipSender.transmitRequest(sipLayer.getLocalIp(device.getLocalIp()), request, (e -> {
             sessionManager.removeByStreamIfSsrc(ssrcInfo.getApp(), ssrcInfo.getStream(), ssrcInfo.getSsrc());
             errorEvent.response(e);
@@ -290,7 +304,8 @@ public class SIPCommander implements ISIPCommander {
             SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), channel.getId(),
                     callId,ssrcInfo.getApp(), ssrcInfo.getStream(), ssrcInfo.getSsrc(), mediaServerItem.getId(), response,
                     InviteSessionType.PLAY);
-            sessionManager.put(ssrcTransaction);
+            ssrcTransaction.setInviteId(ssrcInfo.getInviteId());
+            if (!InviteSipSessionCommitter.confirm(inviteRepository, sessionManager, ssrcTransaction, errorEvent)) return;
             okEvent.response(e);
         }, timeout);
     }
@@ -304,7 +319,7 @@ public class SIPCommander implements ISIPCommander {
      * @param endTime   结束时间,格式要求：yyyy-MM-dd HH:mm:ss
      */
     @Override
-    public void playbackStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
+public void playbackStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
                                   String startTime, String endTime,
                                   SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
 
@@ -384,13 +399,15 @@ public class SIPCommander implements ISIPCommander {
                 content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(), null,
                 callIdHeader, ssrcInfo.getSsrc());
 
+        persistInviteIntent(request, ssrcInfo);
         sipSender.transmitRequest(sipLayer.getLocalIp(device.getLocalIp()), request, errorEvent, event -> {
             ResponseEvent responseEvent = (ResponseEvent) event.event;
             SIPResponse response = (SIPResponse) responseEvent.getResponse();
             SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(),
                     channel.getId(), response.getCallIdHeader().getCallId(), ssrcInfo.getApp(), ssrcInfo.getStream(), ssrcInfo.getSsrc(),
                     mediaServerItem.getId(), response, InviteSessionType.PLAYBACK);
-            sessionManager.put(ssrcTransaction);
+            ssrcTransaction.setInviteId(ssrcInfo.getInviteId());
+            if (!InviteSipSessionCommitter.confirm(inviteRepository, sessionManager, ssrcTransaction, errorEvent)) return;
             okEvent.response(event);
         }, timeout);
     }
@@ -399,7 +416,7 @@ public class SIPCommander implements ISIPCommander {
      * 请求历史媒体下载
      */
     @Override
-    public void downloadStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
+public void downloadStreamCmd(MediaServer mediaServerItem, SSRCInfo ssrcInfo, Device device, DeviceChannel channel,
                                   String startTime, String endTime, int downloadSpeed,
                                   SipSubscribe.Event errorEvent, SipSubscribe.Event okEvent, Long timeout) throws InvalidArgumentException, SipException, ParseException {
 
@@ -475,6 +492,7 @@ public class SIPCommander implements ISIPCommander {
         CallIdHeader newCallIdHeader = sipSender.getNewCallIdHeader(sipLayer.getLocalIp(device.getLocalIp()), device.getTransport());
         Request request = headerProvider.createPlaybackInviteRequest(device, channel.getDeviceId(), content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(), null,newCallIdHeader, ssrcInfo.getSsrc());
 
+        persistInviteIntent(request, ssrcInfo);
         sipSender.transmitRequest(sipLayer.getLocalIp(device.getLocalIp()), request, errorEvent, event -> {
             ResponseEvent responseEvent = (ResponseEvent) event.event;
             SIPResponse response = (SIPResponse) responseEvent.getResponse();
@@ -483,7 +501,8 @@ public class SIPCommander implements ISIPCommander {
             SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), channel.getId(),
                     response.getCallIdHeader().getCallId(), ssrcInfo.getApp(), ssrcInfo.getStream(), ssrc,
                     mediaServerItem.getId(), response, InviteSessionType.DOWNLOAD);
-            sessionManager.put(ssrcTransaction);
+            ssrcTransaction.setInviteId(ssrcInfo.getInviteId());
+            if (!InviteSipSessionCommitter.confirm(inviteRepository, sessionManager, ssrcTransaction, errorEvent)) return;
             okEvent.response(event);
         }, timeout);
     }
@@ -584,7 +603,8 @@ public class SIPCommander implements ISIPCommander {
     @Override
     public void streamByeCmd(Device device, String channelId, SipTransactionInfo sipTransactionInfo, SipSubscribe.Event okEvent) throws InvalidArgumentException, SipException, ParseException, SsrcTransactionNotFoundException {
         Request byteRequest = headerProvider.createByteRequest(device, channelId, sipTransactionInfo);
-        sipSender.transmitRequest(sipLayer.getLocalIp(device.getLocalIp()), byteRequest, null, okEvent);
+        sipSender.transmitRequest(sipLayer.getLocalIp(device.getLocalIp()), byteRequest,
+                event -> { if (event.statusCode == 481 && okEvent != null) okEvent.response(event); }, okEvent);
     }
 
     @Override

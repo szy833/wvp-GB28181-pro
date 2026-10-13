@@ -7,6 +7,7 @@ import lombok.EqualsAndHashCode;
 
 @Data
 public class SsrcTransaction {
+    private String inviteId;
 
     /**
      * 设备编号

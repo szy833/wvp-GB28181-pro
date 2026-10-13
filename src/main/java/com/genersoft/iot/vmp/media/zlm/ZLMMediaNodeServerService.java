@@ -277,6 +277,13 @@ public class ZLMMediaNodeServerService implements IMediaNodeServerService {
     }
 
     @Override
+    public Boolean probeStream(MediaServer node, String app, String stream) {
+        ZLMResult<JSONArray> result = zlmresTfulUtils.getMediaList(node, app, stream, null, null, 2);
+        if (result == null || result.getCode() != 0) return null;
+        return result.getData() != null && !result.getData().isEmpty();
+    }
+
+    @Override
     public Boolean pauseRtpCheck(MediaServer mediaServer, String streamKey) {
         ZLMResult<?> zlmResult = zlmresTfulUtils.pauseRtpCheck(mediaServer, streamKey);
         return zlmResult.getCode() == 0;

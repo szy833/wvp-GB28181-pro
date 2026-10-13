@@ -12,10 +12,9 @@ class MediaDepartureListenerTest {
 
     @Test
     void inviteServiceDoesNotIndependentlyConsumeMediaDeparture() throws Exception {
-        Method method = InviteStreamServiceImpl.class.getDeclaredMethod(
-                "onApplicationEvent", MediaDepartureEvent.class);
-
-        assertNull(method.getAnnotation(EventListener.class),
-                "media departure cleanup must be coordinated by one listener");
+        for (Method method : InviteStreamServiceImpl.class.getDeclaredMethods()) {
+            if (java.util.Arrays.asList(method.getParameterTypes()).contains(MediaDepartureEvent.class))
+                assertNull(method.getAnnotation(EventListener.class), "media departure has one lifecycle coordinator");
+        }
     }
 }

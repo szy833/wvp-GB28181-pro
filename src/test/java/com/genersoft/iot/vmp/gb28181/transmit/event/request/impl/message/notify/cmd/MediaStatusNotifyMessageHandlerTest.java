@@ -31,8 +31,9 @@ class MediaStatusNotifyMessageHandlerTest {
         MediaStatusNotifyMessageHandler handler = handler();
         SsrcTransaction transaction = transaction(InviteSessionType.PLAYBACK);
         InviteInfo inviteInfo = new InviteInfo();
+        inviteInfo.setCallId("call-1");
         when(sessionManager(handler).getSsrcTransactionByCallId("call-1")).thenReturn(transaction);
-        when(inviteService(handler).getInviteInfo(InviteSessionType.PLAYBACK, 2, "stream-1"))
+        when(inviteService(handler).getById("invite-1"))
                 .thenReturn(inviteInfo);
 
         handler.handForDevice(requestEvent(), null,
@@ -46,8 +47,9 @@ class MediaStatusNotifyMessageHandlerTest {
         MediaStatusNotifyMessageHandler handler = handler();
         SsrcTransaction transaction = transaction(InviteSessionType.DOWNLOAD);
         InviteInfo inviteInfo = new InviteInfo();
+        inviteInfo.setCallId("call-1");
         when(sessionManager(handler).getSsrcTransactionByCallId("call-1")).thenReturn(transaction);
-        when(inviteService(handler).getInviteInfo(InviteSessionType.DOWNLOAD, 2, "stream-1"))
+        when(inviteService(handler).getById("invite-1"))
                 .thenReturn(inviteInfo);
 
         handler.handForDevice(requestEvent(), null,
@@ -67,6 +69,30 @@ class MediaStatusNotifyMessageHandlerTest {
 
         verify(playService(handler), never()).stop(any(InviteInfo.class));
         verify(inviteService(handler), never()).getInviteInfo(any(), any(), any());
+    }
+
+    @Test
+    void mediaStatus121UsesDurableCallIdentityWithoutSipIndex() throws Exception {
+        MediaStatusNotifyMessageHandler handler = handler();
+        InviteInfo invite = new InviteInfo();
+        invite.setCallId("call-1");
+        invite.setType(InviteSessionType.DOWNLOAD);
+        when(inviteService(handler).getByCallId("call-1")).thenReturn(invite);
+        handler.handForDevice(requestEvent(), null,
+                DocumentHelper.parseText("<Notify><NotifyType>121</NotifyType></Notify>").getRootElement());
+        verify(playService(handler)).stop(invite);
+    }
+
+    @Test
+    void missingIdentityNeverQueriesNullInviteId() throws Exception {
+        MediaStatusNotifyMessageHandler handler = handler();
+        SsrcTransaction transaction = transaction(InviteSessionType.PLAYBACK);
+        transaction.setInviteId(null);
+        when(sessionManager(handler).getSsrcTransactionByCallId("call-1")).thenReturn(transaction);
+        handler.handForDevice(requestEvent(), null,
+                DocumentHelper.parseText("<Notify><NotifyType>121</NotifyType></Notify>").getRootElement());
+        verify(inviteService(handler), never()).getById(any());
+        verify(playService(handler), never()).stop(any(InviteInfo.class));
     }
 
     private static MediaStatusNotifyMessageHandler handler() throws Exception {
@@ -95,6 +121,8 @@ class MediaStatusNotifyMessageHandlerTest {
     private static SsrcTransaction transaction(InviteSessionType type) {
         SsrcTransaction transaction = new SsrcTransaction();
         transaction.setCallId("call-1");
+        transaction.setInviteId("invite-1");
+        transaction.setMediaServerId("media-1");
         transaction.setChannelId(2);
         transaction.setStream("stream-1");
         transaction.setType(type);

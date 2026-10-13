@@ -113,13 +113,7 @@ public class ApiStreamController {
             JSONObject resultJSON = new JSONObject();
             resultJSON.put("error","timeout");
             result.setResult(resultJSON);
-            String streamId = String.format("%s_%s", device.getDeviceId(), deviceChannel.getDeviceId());
-            try {
-                playService.stop(InviteSessionType.PLAY, device, deviceChannel, streamId);
-            } catch (RuntimeException e) {
-                log.warn("播放超时统一停止流程失败，deviceId={}, channelId={}: {}",
-                        serial, code, e.getMessage());
-            }
+            // A single HTTP timeout must not stop a shared or replacement Invite.
         });
 
         MediaServer newMediaServerItem = playService.getNewMediaServerItem(device);
@@ -250,14 +244,7 @@ public class ApiStreamController {
             return result;
         }
 
-        try {
-            cmder.streamByeCmd(device, code, MediaStreamUtil.RTP_APP, inviteInfo.getStream(), null, null);
-        } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
-            log.error("[停止点播] 发送BYE失败: {}", e.getMessage());
-        } finally {
-            inviteStreamService.removeInviteInfo(inviteInfo);
-            deviceChannelService.stopPlay(inviteInfo.getChannelId());
-        }
+        playService.stopIfOwner(inviteInfo);
         return null;
     }
 

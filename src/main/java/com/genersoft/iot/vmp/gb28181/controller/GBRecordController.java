@@ -145,16 +145,6 @@ public class GBRecordController {
 			result.setResult(timeoutResult);
 			requestMessage.setData(timeoutResult);
 			resultHolder.invokeResult(requestMessage);
-			try {
-				InviteInfo inviteInfo = inviteStreamService.getInviteInfoByDeviceAndChannel(
-						InviteSessionType.DOWNLOAD, channel.getId());
-				if (inviteInfo != null) {
-					playService.stop(inviteInfo);
-				}
-			} catch (RuntimeException e) {
-				log.warn("[录像下载] 超时停止流程失败，deviceId={}, channelId={}: {}",
-						deviceId, channelId, e.getMessage());
-			}
 		});
 		playService.download(device, channel, startTime, endTime, Integer.parseInt(downloadSpeed),
 		(code, msg, data)->{

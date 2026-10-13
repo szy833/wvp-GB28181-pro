@@ -29,7 +29,7 @@ import static org.mockito.Mockito.*;
 class PlaybackAndDownloadTimeoutTest {
 
     @Test
-    void playbackTimeoutStopsTheCurrentInviteOwner() {
+    void playbackTimeoutOnlyCompletesThisWaiter() {
         PlaybackFixture fixture = playbackFixture();
         DeferredResult<WVPResult<StreamContent>> result = fixture.controller.start(
                 mock(HttpServletRequest.class), "device-1", "channel-1", "start", "end");
@@ -37,11 +37,11 @@ class PlaybackAndDownloadTimeoutTest {
         timeoutCallback(result).run();
 
         verify(fixture.resultHolder).invokeResult(any(RequestMessage.class));
-        verify(fixture.playService).stop(fixture.invite);
+        verify(fixture.playService, never()).stop(any(InviteInfo.class));
     }
 
     @Test
-    void downloadTimeoutStopsTheCurrentInviteOwner() {
+    void downloadTimeoutOnlyCompletesThisWaiter() {
         DownloadFixture fixture = downloadFixture();
         DeferredResult<WVPResult<StreamContent>> result = fixture.controller.download(
                 mock(HttpServletRequest.class), "device-1", "channel-1", "start", "end", "1");
@@ -49,7 +49,7 @@ class PlaybackAndDownloadTimeoutTest {
         timeoutCallback(result).run();
 
         verify(fixture.resultHolder).invokeResult(any(RequestMessage.class));
-        verify(fixture.playService).stop(fixture.invite);
+        verify(fixture.playService, never()).stop(any(InviteInfo.class));
     }
 
     @Test

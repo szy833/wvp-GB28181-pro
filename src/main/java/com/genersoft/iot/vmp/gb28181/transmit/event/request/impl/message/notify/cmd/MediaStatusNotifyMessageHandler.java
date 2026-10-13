@@ -91,20 +91,28 @@ public class MediaStatusNotifyMessageHandler extends SIPRequestProcessorParent i
         if ("121".equals(NotifyType)){
             log.info("[录像流]推送完毕，收到关流通知");
 
+            InviteInfo correlated = inviteStreamService.getByCallId(callIdHeader.getCallId());
+            if (correlated != null && (correlated.getType() == InviteSessionType.DOWNLOAD
+                    || correlated.getType() == InviteSessionType.PLAYBACK)) {
+                playService.stop(correlated);
+            }
             SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByCallId(callIdHeader.getCallId());
             if (ssrcTransaction != null) {
                 log.info("[录像流]推送完毕，关流通知， device: {}, channelId: {}", ssrcTransaction.getDeviceId(), ssrcTransaction.getChannelId());
                 InviteSessionType sessionType = ssrcTransaction.getType();
                 if (sessionType == InviteSessionType.DOWNLOAD || sessionType == InviteSessionType.PLAYBACK) {
-                    InviteInfo inviteInfo = inviteStreamService.getInviteInfo(sessionType,
-                            ssrcTransaction.getChannelId(), ssrcTransaction.getStream());
-                    if (inviteInfo != null) {
-                        playService.stop(inviteInfo);
+                    if (correlated == null && ssrcTransaction.getInviteId() != null) {
+                        InviteInfo inviteInfo = inviteStreamService.getById(ssrcTransaction.getInviteId());
+                        if (inviteInfo != null && java.util.Objects.equals(inviteInfo.getCallId(), callIdHeader.getCallId())) {
+                            playService.stop(inviteInfo);
+                        }
                     }
                     // 去除监听流注销自动停止的监听
-                    Hook hook = Hook.getInstance(HookType.on_media_arrival, MediaStreamUtil.RTP_APP,
-                            ssrcTransaction.getStream(), ssrcTransaction.getMediaServerId());
-                    subscribe.removeSubscribe(hook);
+                    if (ssrcTransaction.getMediaServerId() != null) {
+                        Hook hook = Hook.getInstance(HookType.on_media_arrival, MediaStreamUtil.RTP_APP,
+                                ssrcTransaction.getStream(), ssrcTransaction.getMediaServerId());
+                        subscribe.removeSubscribe(hook);
+                    }
                 }
                 if (ssrcTransaction.getPlatformId() != null) {
                     // 如果级联播放，需要给上级发送此通知 TODO 多个上级同时观看一个下级 可能存在停错的问题，需要将点播CallId进行上下级绑定

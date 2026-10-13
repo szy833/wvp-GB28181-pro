@@ -100,12 +100,7 @@ public class PlayController {
 			wvpResult.setMsg("点播超时");
 			result.setResult(wvpResult);
 
-			try {
-				playService.stop(InviteSessionType.PLAY, device, channel, streamId);
-			} catch (RuntimeException e) {
-				log.warn("[点播等待超时] 统一停止流程失败，deviceId={}, channelId={}: {}",
-						deviceId, channelId, e.getMessage());
-			}
+			// Only this HTTP waiter timed out; the shared Invite owns its establishment deadline.
 		});
 
 		ErrorCallback<StreamInfo> callback  = (code, msg, streamInfo) -> {
@@ -148,7 +143,8 @@ public class PlayController {
 	@Parameter(name = "deviceId", description = "设备国标编号", required = true)
 	@Parameter(name = "channelId", description = "通道国标编号", required = true)
 	@GetMapping("/stop/{deviceId}/{channelId}")
-	public JSONObject playStop(@PathVariable String deviceId, @PathVariable String channelId) {
+	public JSONObject playStop(@PathVariable String deviceId, @PathVariable String channelId,
+                              @RequestParam(required = false) String stream) {
 
 		log.debug(String.format("设备预览/回放停止API调用，streamId：%s_%s", deviceId, channelId ));
 
@@ -160,8 +156,7 @@ public class PlayController {
 		DeviceChannel channel = deviceChannelService.getOneForSource(deviceId, channelId);
 		Assert.notNull(device, "设备不存在");
 		Assert.notNull(channel, "通道不存在");
-		String streamId = String.format("%s_%s", device.getDeviceId(), channel.getDeviceId());
-		playService.stop(InviteSessionType.PLAY, device, channel, streamId);
+		playService.stop(InviteSessionType.PLAY, device, channel, stream);
 		JSONObject json = new JSONObject();
 		json.put("deviceId", deviceId);
 		json.put("channelId", channelId);

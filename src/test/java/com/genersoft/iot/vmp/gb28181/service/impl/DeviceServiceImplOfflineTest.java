@@ -107,6 +107,9 @@ class DeviceServiceImplOfflineTest {
         verify(playService).stopTalk(device, channel, null);
         verify(playService).stopTalkForDevice(device);
         verify(inviteStreamService).clearActiveInviteInfoByDeviceId("device-1");
+        var order = inOrder(inviteStreamService, sessionManager);
+        order.verify(inviteStreamService).clearActiveInviteInfoByDeviceId("device-1");
+        order.verify(sessionManager).getSsrcTransactionByDeviceId("device-1");
         verify(receiveRtp, never()).closeRTPServerBySsrcId(any(), any(), any());
         verify(sessionManager).removeByCallId("call-talk");
     }

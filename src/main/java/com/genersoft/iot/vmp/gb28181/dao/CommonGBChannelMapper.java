@@ -606,7 +606,7 @@ public interface CommonGBChannelMapper {
     @SelectProvider(type = ChannelProvider.class, method = "queryCommonChannelByDeviceChannel")
     CommonGBChannel queryCommonChannelByDeviceChannel(@Param("dataType") Integer dataType, @Param("dataDeviceId") Integer dataDeviceId, @Param("deviceId") String deviceId);
 
-    @Update("UPDATE wvp_device_channel SET stream_id = #{stream} where id = #{gbId}")
+    @Update("UPDATE wvp_device_channel SET stream_id = #{stream} where id = #{gbId} AND data_type<>1")
     void updateStream(int gbId, String stream);
 
     @Update("<script> " +

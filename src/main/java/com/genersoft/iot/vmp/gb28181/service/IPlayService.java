@@ -82,6 +82,11 @@ public interface IPlayService {
      */
     boolean stopIfOwner(InviteInfo expected);
 
+    /** Device BYE has already terminated the SIP dialog; do not send another BYE. */
+    boolean stopAfterDeviceBye(InviteInfo expected);
+
+    int retryPendingInviteCleanups(int limit);
+
     void play(CommonGBChannel channel, Boolean record, ErrorCallback<StreamInfo> callback);
 
     void stopPlay(InviteSessionType inviteSessionType, CommonGBChannel channel);

@@ -851,6 +851,12 @@ public class MediaServerServiceImpl implements IMediaServerService {
     }
 
     @Override
+    public Boolean probeStream(MediaServer node, String app, String stream) {
+        IMediaNodeServerService service = nodeServerServiceMap.get(node.getType());
+        return service == null ? null : service.probeStream(node, app, stream);
+    }
+
+    @Override
     public Integer startSendRtpPassive(MediaServer mediaServer, SendRtpInfo sendRtpItem, Integer timeout) {
         IMediaNodeServerService mediaNodeServerService = nodeServerServiceMap.get(mediaServer.getType());
         if (mediaNodeServerService == null) {

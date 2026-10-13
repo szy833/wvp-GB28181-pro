@@ -14,6 +14,18 @@ public class SipInviteSessionCleanupTask {
     @Autowired
     private SipInviteSessionManager sessionManager;
 
+    @Scheduled(fixedDelay = 1_000, initialDelay = 1_000)
+    public void retryPendingDeletes() {
+        try {
+            int removed = sessionManager.retryPendingSessionDeletes(100);
+            if (removed > 0) {
+                log.info("[SIP Invite会话] 本轮删除补偿完成 {} 条", removed);
+            }
+        } catch (RuntimeException e) {
+            log.warn("[SIP Invite会话] 查询删除补偿失败，等待下一轮重试", e);
+        }
+    }
+
     @Scheduled(fixedDelay = 30_000)
     public void execute() {
         try {

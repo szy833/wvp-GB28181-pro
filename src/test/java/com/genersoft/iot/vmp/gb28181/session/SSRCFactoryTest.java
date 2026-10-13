@@ -74,6 +74,19 @@ class SSRCFactoryTest {
     }
 
     @Test
+    void durablePlansReserveSsrcEvenWithoutAnyZlmMedia() {
+        var repository = mock(com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository.class);
+        when(repository.reservedSsrcs(SERVER_ID)).thenReturn(List.of("0200000001"));
+        ReflectionTestUtils.setField(ssrcFactory, "inviteRepository", repository);
+        ssrcFactory.markReconciliationReady(rtpServer(SERVER_ID), List.of());
+        Set<String> allocated = new HashSet<>();
+        for (int i = 0; i < 9999; i++) allocated.add(allocatePlaySsrc(SERVER_ID));
+        assertEquals(9999, allocated.size());
+        assertFalse(allocated.contains("0200000001"));
+        assertNull(allocatePlaySsrc(SERVER_ID));
+    }
+
+    @Test
     void stringAllocationApis_shouldNotExist() {
         String playMethod = "getPlay" + "Ssrc";
         String playbackMethod = "getPlayBack" + "Ssrc";
@@ -352,6 +365,7 @@ class SSRCFactoryTest {
 
             MediaServerOnlineEvent onlineEvent = new MediaServerOnlineEvent(this);
             onlineEvent.setMediaServer(server);
+            factory.onApplicationReady();
             factory.onMediaServerOnline(onlineEvent);
 
             assertTrue(queried.await(2, TimeUnit.SECONDS), "online event should trigger reconciliation after startup settles");

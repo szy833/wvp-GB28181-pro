@@ -45,6 +45,13 @@ public class InviteResponseProcessor extends SIPResponseProcessorAbstract {
 	@Autowired
 	private SIPRequestHeaderProvider headerProvider;
 
+    @Autowired
+    private com.genersoft.iot.vmp.gb28181.service.IInviteStreamService invites;
+    @Autowired
+    private com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository inviteRepository;
+    @Autowired
+    private com.genersoft.iot.vmp.gb28181.service.IPlayService playService;
+
 	@Override
 	public void afterPropertiesSet() throws Exception {
 		// 添加消息处理的订阅
@@ -81,6 +88,12 @@ public class InviteResponseProcessor extends SIPResponseProcessorAbstract {
 
 				log.info("[回复ack] {}-> {}:{} ", sdp.getOrigin().getUsername(), event.getRemoteIpAddress(), event.getRemotePort());
 				sipSender.transmitRequest( response.getLocalAddress().getHostAddress(), reqAck);
+                var invite = invites.getByCallId(response.getCallIdHeader().getCallId());
+                if (invite != null && invite.getLifecycle().closing()) {
+                    var late = inviteRepository.sipFinal(invite.getInviteId(), invite.getCallId(), true,
+                            new com.genersoft.iot.vmp.gb28181.bean.SipTransactionInfo(response)).requireApplied();
+                    playService.stopIfOwner(late);
+                }
 			}
 		} catch (InvalidArgumentException | ParseException | SipException | SdpParseException e) {
 			log.info("[点播回复ACK]，异常：", e );

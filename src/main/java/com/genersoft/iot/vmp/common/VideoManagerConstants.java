@@ -22,18 +22,6 @@ public class VideoManagerConstants {
 	public static final String DEVICE_KEEPALIVE_PREFIX = "VMP_DEVICE_KEEPALIVE:";
 	public static final String DEVICE_REGISTER_PREFIX = "VMP_DEVICE_REGISTER:";
 
-	public static final String INVITE_PREFIX = "VMP_GB_INVITE_INFO";
-	public static final String INVITE_VERSION_PREFIX = "VMP_GB_INVITE_VERSION:";
-	public static final String INVITE_INDEX_CHANNEL_PREFIX = "VMP_GB_INVITE_INDEX_CHANNEL:";
-	public static final String INVITE_INDEX_STREAM_PREFIX = "VMP_GB_INVITE_INDEX_STREAM:";
-	public static final String INVITE_INDEX_SSRC_PREFIX = "VMP_GB_INVITE_INDEX_SSRC:";
-	public static final String INVITE_INDEX_DEVICE_PREFIX = "VMP_GB_INVITE_INDEX_DEVICE:";
-	public static final String INVITE_ACTIVE_MEDIA_PREFIX = "VMP_GB_INVITE_ACTIVE_MEDIA:";
-	public static final String INVITE_EXPIRE_AT = "VMP_GB_INVITE_EXPIRE_AT";
-	public static final String INVITE_INDEX_READY = "VMP_GB_INVITE_INDEX_READY";
-	public static final String INVITE_INDEX_BACKFILL_LOCK = "VMP_GB_INVITE_INDEX_BACKFILL_LOCK";
-	public static final String INVITE_INDEX_BACKFILLED_VALUE = "backfilled";
-	public static final String INVITE_INDEX_READY_VALUE = "ready";
 
 	public static final String SEND_RTP_PORT = "VM_SEND_RTP_PORT:";
 	public static final String SEND_RTP_INFO_CALLID = "VMP_SEND_RTP_INFO:CALL_ID:";
@@ -49,6 +37,7 @@ public class VideoManagerConstants {
 	public static final String SIP_INVITE_SESSION_V2_DEVICE = "VMP_SIP_INVITE_SESSION_V2:DEVICE:";
 	public static final String SIP_INVITE_SESSION_V2_EXPIRE = "VMP_SIP_INVITE_SESSION_V2:EXPIRE:";
 	public static final String SIP_INVITE_SESSION_V2_META = "VMP_SIP_INVITE_SESSION_V2:META:";
+	public static final String SIP_INVITE_SESSION_V2_PENDING_DELETE = "VMP_SIP_INVITE_SESSION_V2:PENDING_DELETE:";
 
 	public static final String MEDIA_STREAM_AUTHORITY = "VMP_MEDIA_STREAM_AUTHORITY";
 	public static final String MEDIA_STREAM_AUTHORITY_ENTRY_PREFIX = "VMP_MEDIA_STREAM_AUTHORITY_ENTRY:";

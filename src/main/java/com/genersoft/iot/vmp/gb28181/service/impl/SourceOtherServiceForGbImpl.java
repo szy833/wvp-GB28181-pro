@@ -45,11 +45,11 @@ public class SourceOtherServiceForGbImpl implements ISourceOtherService {
             return null;
         }
         // 国标流， 点播/录像回放/录像下载
-        InviteInfo inviteInfo = inviteStreamService.getInviteInfoByStream(null, stream);
+        InviteInfo inviteInfo = inviteStreamService.getInviteInfoByStreamAndMediaServer(mediaServerId, stream);
         if (inviteInfo == null) {
             return null;
         }
-        if (inviteInfo.getStatus() == InviteSessionStatus.ok) {
+        if (inviteInfo.isSipAccepted() && !inviteInfo.getLifecycle().closing()) {
             // 录像下载
             if (inviteInfo.getType() == InviteSessionType.DOWNLOAD) {
                 return false;

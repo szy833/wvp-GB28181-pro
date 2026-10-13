@@ -1,53 +1,30 @@
 package com.genersoft.iot.vmp.gb28181.task;
 
-import com.genersoft.iot.vmp.gb28181.service.IInviteStreamService;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.task.TaskExecutor;
-import org.springframework.test.util.ReflectionTestUtils;
-
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisClusterConnection;
+import org.springframework.jdbc.core.JdbcTemplate;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-
 class InviteInfoIndexBackfillTaskTest {
-
-    @Test
-    void schedulesBackfillWithoutActivatingIndexOnlyReads() {
-        IInviteStreamService inviteStreamService = mock(IInviteStreamService.class);
-        TaskExecutor taskExecutor = mock(TaskExecutor.class);
-        doAnswer(invocation -> {
-            ((Runnable) invocation.getArgument(0)).run();
-            return null;
-        }).when(taskExecutor).execute(any(Runnable.class));
-        when(inviteStreamService.inviteIndexesReady()).thenReturn(false);
-        when(inviteStreamService.inviteIndexesBackfilled()).thenReturn(false);
-        InviteInfoIndexBackfillTask task = new InviteInfoIndexBackfillTask();
-        ReflectionTestUtils.setField(task, "inviteStreamService", inviteStreamService);
-        ReflectionTestUtils.setField(task, "taskExecutor", taskExecutor);
-
-        task.scheduleBackfill();
-
-        verify(taskExecutor).execute(any(Runnable.class));
-        verify(inviteStreamService).rebuildInviteIndexes();
-        verify(inviteStreamService, never()).activateInviteIndexes();
+    @Test void missingSchemaFailsStartupInsteadOfBackfillingOldNamespace() {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class); RedisConnectionFactory redis=mock(RedisConnectionFactory.class);
+        when(redis.getConnection()).thenReturn(mock(RedisConnection.class));
+        when(jdbc.queryForList(anyString())).thenThrow(new IllegalStateException("missing column"));
+        assertThrows(IllegalStateException.class,()->new InviteLifecyclePrerequisites(jdbc,redis).afterSingletonsInstantiated());
     }
-
-    @Test
-    void executorRejectionDoesNotPermanentlySetRunningGuard() {
-        IInviteStreamService inviteStreamService = mock(IInviteStreamService.class);
-        TaskExecutor taskExecutor = mock(TaskExecutor.class);
-        when(inviteStreamService.inviteIndexesReady()).thenReturn(false);
-        when(inviteStreamService.inviteIndexesBackfilled()).thenReturn(false);
-        doThrow(new IllegalStateException("executor rejected"))
-                .doAnswer(invocation -> null)
-                .when(taskExecutor).execute(any(Runnable.class));
-        InviteInfoIndexBackfillTask task = new InviteInfoIndexBackfillTask();
-        ReflectionTestUtils.setField(task, "inviteStreamService", inviteStreamService);
-        ReflectionTestUtils.setField(task, "taskExecutor", taskExecutor);
-
-        assertDoesNotThrow(task::scheduleBackfill);
-        task.scheduleBackfill();
-
-        verify(taskExecutor, times(2)).execute(any(Runnable.class));
+    @Test void clusterIsRejectedBeforeServingTraffic() {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class); RedisConnectionFactory redis=mock(RedisConnectionFactory.class);
+        when(redis.getConnection()).thenReturn(mock(RedisClusterConnection.class));
+        assertThrows(IllegalStateException.class,()->new InviteLifecyclePrerequisites(jdbc,redis).afterSingletonsInstantiated());
+        verifyNoInteractions(jdbc);
+    }
+    @Test void standaloneWithMigratedSchemaPassesReadOnlyCheck() {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class); RedisConnectionFactory redis=mock(RedisConnectionFactory.class);
+        when(redis.getConnection()).thenReturn(mock(RedisConnection.class));
+        assertDoesNotThrow(()->new InviteLifecyclePrerequisites(jdbc,redis).afterSingletonsInstantiated());
+        verify(jdbc).queryForList(contains("WHERE 1=0"));
     }
 }

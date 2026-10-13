@@ -25,7 +25,7 @@ import static org.mockito.Mockito.*;
 class PlayControllerTimeoutTest {
 
     @Test
-    void timeoutDelegatesToUnifiedPlayStopWithCanonicalStream() {
+    void timeoutOnlyCompletesItsOwnHttpRequest() {
         Fixture fixture = fixture();
 
         DeferredResult<WVPResult<StreamContent>> result = fixture.controller.play(
@@ -34,13 +34,12 @@ class PlayControllerTimeoutTest {
 
         timeoutCallback.run();
 
-        verify(fixture.playService).stop(InviteSessionType.PLAY, fixture.device, fixture.channel,
-                "device-1_channel-device-1");
-        verify(fixture.deviceChannelService, never()).stopPlay(fixture.channel.getId());
+        verify(fixture.playService, never()).stop(any(), any(Device.class), any(), any());
+
     }
 
     @Test
-    void timeoutSwallowsStopRuntimeException() {
+    void timeoutNeverInvokesTheSharedStopEvenIfItWouldFail() {
         Fixture fixture = fixture();
         doThrow(new IllegalStateException("stop failed")).when(fixture.playService)
                 .stop(eq(InviteSessionType.PLAY), eq(fixture.device), eq(fixture.channel),
@@ -51,8 +50,23 @@ class PlayControllerTimeoutTest {
         Runnable timeoutCallback = timeoutCallback(result);
 
         assertDoesNotThrow(timeoutCallback::run);
-        verify(fixture.playService).stop(InviteSessionType.PLAY, fixture.device, fixture.channel,
-                "device-1_channel-device-1");
+        verify(fixture.playService, never()).stop(any(), any(Device.class), any(), any());
+    }
+
+    @Test
+    void explicitStopPreservesTheRequestedGeneration() {
+        Fixture fixture = fixture();
+        when(fixture.deviceChannelService.getOneForSource("device-1", "path-channel")).thenReturn(fixture.channel);
+        fixture.controller.playStop("device-1", "path-channel", "gb_old_generation");
+        verify(fixture.playService).stop(InviteSessionType.PLAY, fixture.device, fixture.channel, "gb_old_generation");
+    }
+
+    @Test
+    void managementStopWithoutStreamExplicitlyTargetsCurrentOwner() {
+        Fixture fixture = fixture();
+        when(fixture.deviceChannelService.getOneForSource("device-1", "path-channel")).thenReturn(fixture.channel);
+        fixture.controller.playStop("device-1", "path-channel", null);
+        verify(fixture.playService).stop(InviteSessionType.PLAY, fixture.device, fixture.channel, null);
     }
 
     @SuppressWarnings("unchecked")

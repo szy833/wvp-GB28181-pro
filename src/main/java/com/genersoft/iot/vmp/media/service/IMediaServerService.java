@@ -136,6 +136,8 @@ public interface IMediaServerService {
 
     Boolean isStreamReady(MediaServer mediaServer, String rtp, String streamId);
 
+    Boolean probeStream(MediaServer mediaServer, String app, String stream);
+
     Integer startSendRtpPassive(MediaServer mediaServer, SendRtpInfo sendRtpItem, Integer timeout);
 
     Integer startSendRtpTalk(MediaServer mediaServer, TalkRtpInfo talkRtpInfo, Integer timeout);

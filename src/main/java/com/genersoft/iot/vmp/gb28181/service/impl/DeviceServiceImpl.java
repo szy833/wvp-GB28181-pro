@@ -281,6 +281,13 @@ public class DeviceServiceImpl implements IDeviceService {
         } catch (RuntimeException e) {
             log.warn("[设备离线] 清理对讲 owner 失败：deviceId={}", device.getDeviceId(), e);
         }
+        try {
+            // Persist full stop intents before any SIP lookup can fail or remove its association.
+            int removed = inviteStreamService.clearActiveInviteInfoByDeviceId(device.getDeviceId());
+            log.info("[设备离线] 清理活跃InviteInfo：deviceId={}, removed={}", device.getDeviceId(), removed);
+        } catch (RuntimeException e) {
+            log.warn("[设备离线] 清理活跃InviteInfo失败：deviceId={}", device.getDeviceId(), e);
+        }
         // 离线释放所有ssrc
         List<SsrcTransaction> ssrcTransactions = sessionManager.getSsrcTransactionByDeviceId(device.getDeviceId());
         if (ssrcTransactions != null && !ssrcTransactions.isEmpty()) {
@@ -303,15 +310,14 @@ public class DeviceServiceImpl implements IDeviceService {
                     sessionManager.removeByCallId(ssrcTransaction.getCallId());
                     continue;
                 }
-                if (ssrcTransaction.getSsrc() != null) {
-                    receiveRtpServerService.closeRTPServerBySsrcId(
-                            ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getSsrc());
+                if (ssrcTransaction.getInviteId() == null) {
+                    log.error("[设备离线] SIP会话缺少Invite身份，拒绝猜测关闭：callId={}", ssrcTransaction.getCallId());
+                    continue;
                 }
-                // The SSRC API owns only the listener target; always release
-                // the published business stream separately.
-                receiveRtpServerService.closeRTPServerByBusinessStreamId(
-                        ssrcTransaction.getMediaServerId(), ssrcTransaction.getApp(), ssrcTransaction.getStream());
-                sessionManager.removeByCallId(ssrcTransaction.getCallId());
+                com.genersoft.iot.vmp.common.InviteInfo invite = inviteStreamService.getById(ssrcTransaction.getInviteId());
+                if (invite != null) playService.stopIfOwner(invite);
+                else log.error("[设备离线] Invite主记录缺失，需要对账：inviteId={}, callId={}",
+                        ssrcTransaction.getInviteId(), ssrcTransaction.getCallId());
             }
         }
         // 移除订阅
@@ -331,12 +337,6 @@ public class DeviceServiceImpl implements IDeviceService {
 
                 audioBroadcastManager.del(audioBroadcastCatch.getChannelId());
             }
-        }
-        try {
-            int removed = inviteStreamService.clearActiveInviteInfoByDeviceId(device.getDeviceId());
-            log.info("[设备离线] 清理活跃InviteInfo：deviceId={}, removed={}", device.getDeviceId(), removed);
-        } catch (RuntimeException e) {
-            log.warn("[设备离线] 清理活跃InviteInfo失败：deviceId={}", device.getDeviceId(), e);
         }
     }
 

@@ -9,8 +9,11 @@ import com.genersoft.iot.vmp.media.zlm.ZLMRESTfulUtils;
 import com.genersoft.iot.vmp.media.zlm.dto.ZLMResult;
 import com.genersoft.iot.vmp.media.event.mediaServer.MediaServerOnlineEvent;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -58,12 +61,39 @@ public class SSRCFactory {
     private UserSetting userSetting;
 
     private String domainPart;
+    private volatile boolean reconciliationRunning;
+    private boolean destroyed;
 
     @PostConstruct
     public void init() {
         String sipDomain = sipConfig.getDomain();
         domainPart = sipDomain.length() >= 8 ? sipDomain.substring(3, 8) : sipDomain;
-        scheduler.scheduleAtFixedRate(this::rebuild, 5, 5, TimeUnit.SECONDS);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public synchronized void onApplicationReady() {
+        if (reconciliationRunning || destroyed) {
+            return;
+        }
+        reconciliationRunning = true;
+        scheduler.scheduleWithFixedDelay(this::rebuildIfRunning, 0, 5, TimeUnit.SECONDS);
+    }
+
+    @PreDestroy
+    @EventListener(ContextClosedEvent.class)
+    public synchronized void destroy() {
+        if (destroyed) {
+            return;
+        }
+        reconciliationRunning = false;
+        destroyed = true;
+        scheduler.shutdownNow();
+    }
+
+    private void rebuildIfRunning() {
+        if (reconciliationRunning) {
+            rebuild();
+        }
     }
 
     /**
@@ -72,13 +102,13 @@ public class SSRCFactory {
      * the node and ZLM has time to finish initializing its API.
      */
     @EventListener
-    public void onMediaServerOnline(MediaServerOnlineEvent event) {
+    public synchronized void onMediaServerOnline(MediaServerOnlineEvent event) {
         MediaServer mediaServer = event == null ? null : event.getMediaServer();
-        if (mediaServer == null || !mediaServer.isRtpEnable()) {
+        if (!reconciliationRunning || mediaServer == null || !mediaServer.isRtpEnable()) {
             return;
         }
         try {
-            scheduler.schedule(this::rebuild, 1, TimeUnit.SECONDS);
+            scheduler.schedule(this::rebuildIfRunning, 1, TimeUnit.SECONDS);
         } catch (RejectedExecutionException e) {
             // The application is shutting down; no retry is needed.
             log.debug("[SSRC对账] 媒体节点上线重试已取消，调度器已关闭：{}", mediaServer.getId());
@@ -221,7 +251,7 @@ public class SSRCFactory {
                     validServer = true;
                     observedServerIds.add(server.getId());
                     if (!server.isRtpEnable()) {
-                        reconciliationStates.put(server.getId(), ReconciliationState.READY);
+                        markReconciliationReady(server, List.of());
                         continue;
                     }
                     ZLMResult<?> result = zlmresTfulUtils.getMediaList(server, null, null, "rtsp", null);
@@ -265,6 +295,9 @@ public class SSRCFactory {
         }
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository inviteRepository;
+
     void markReconciliationReady(MediaServer server, List<JSONObject> list) {
         if (server == null || server.getId() == null || list == null) {
             if (server != null) {
@@ -274,6 +307,14 @@ public class SSRCFactory {
         }
         synchronized (lockMap.computeIfAbsent(server.getId(), k -> new Object())) {
             BitSet bits = new BitSet(10000);
+            // Persisted plans survive a WVP restart even before ZLM exposes a playable stream.
+            if (inviteRepository != null) {
+                for (String reserved : inviteRepository.reservedSsrcs(server.getId())) {
+                    int suffix = suffixIndex(reserved);
+                    if (suffix < 0) throw new IllegalStateException("Invalid durable SSRC reservation");
+                    bits.set(suffix);
+                }
+            }
             int count = 0;
             for (JSONObject obj : list) {
                 if (obj == null) {
@@ -294,7 +335,11 @@ public class SSRCFactory {
                     return;
                 }
                 try {
-                    bits.set((int) (Long.parseLong(originUrl.substring(idx + 5), 16) % 10000));
+                    String listener = originUrl.substring(idx + 5);
+                    if (!listener.matches("[0-9a-fA-F]{8}(?:_[0-9a-fA-F]{32})?")) throw new NumberFormatException("Invalid RTP listener identity");
+                    int generation = listener.indexOf('_');
+                    String ssrcHex = generation < 0 ? listener : listener.substring(0, generation);
+                    bits.set((int) (Long.parseLong(ssrcHex, 16) % 10000));
                     count++;
                 } catch (NumberFormatException e) {
                     markReconciliationFailed(server, "ZLM RTP条目的originUrl非法");

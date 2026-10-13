@@ -22,21 +22,20 @@ import static org.mockito.Mockito.*;
 class ApiStreamControllerTimeoutTest {
 
     @Test
-    void timeoutDelegatesToUnifiedPlayStop() {
+    void timeoutOnlyCompletesItsOwnHttpRequest() {
         Fixture fixture = fixture();
         DeferredResult<?> result = ReflectionTestUtils.invokeMethod(fixture.controller, "start", "device-1",
                 null, "channel-path", null, null, null, null, null, null);
 
         timeoutCallback(result).run();
 
-        verify(fixture.playService).stop(InviteSessionType.PLAY, fixture.device, fixture.channel,
-                "device-1_channel-1");
+        verify(fixture.playService, never()).stop(any(), any(Device.class), any(), any());
         verifyNoInteractions(fixture.invites);
-        verify(fixture.channels, never()).stopPlay(fixture.channel.getId());
+
     }
 
     @Test
-    void timeoutSwallowsStopFailure() {
+    void timeoutNeverInvokesTheSharedStopEvenIfItWouldFail() {
         Fixture fixture = fixture();
         doThrow(new IllegalStateException("stop failed")).when(fixture.playService)
                 .stop(eq(InviteSessionType.PLAY), eq(fixture.device), eq(fixture.channel), eq("device-1_channel-1"));
@@ -44,8 +43,7 @@ class ApiStreamControllerTimeoutTest {
                 null, "channel-path", null, null, null, null, null, null);
 
         assertDoesNotThrow(() -> timeoutCallback(result).run());
-        verify(fixture.playService).stop(InviteSessionType.PLAY, fixture.device, fixture.channel,
-                "device-1_channel-1");
+        verify(fixture.playService, never()).stop(any(), any(Device.class), any(), any());
     }
 
     @SuppressWarnings("unchecked")

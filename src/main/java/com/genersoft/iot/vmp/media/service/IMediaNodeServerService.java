@@ -45,6 +45,9 @@ public interface IMediaNodeServerService {
 
     List<StreamInfo> getMediaList(MediaServer mediaServer, String app, String stream, String callId);
 
+    /** true=present, false=confirmed absent, null=unknown; errors must never imply absence. */
+    default Boolean probeStream(MediaServer mediaServer, String app, String stream) { return null; }
+
     /**
      * Query the number of active business streams using the provider's native
      * stream semantics.

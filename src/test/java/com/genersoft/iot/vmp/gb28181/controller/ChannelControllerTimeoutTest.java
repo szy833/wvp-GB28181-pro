@@ -18,25 +18,25 @@ import static org.mockito.Mockito.*;
 class ChannelControllerTimeoutTest {
 
     @Test
-    void playTimeoutStopsTheCommonChannel() {
+    void playTimeoutOnlyCompletesThisWaiter() {
         Fixture fixture = fixture();
         DeferredResult<WVPResult<StreamContent>> result = fixture.controller.play(
                 mock(HttpServletRequest.class), 1);
 
         timeoutCallback(result).run();
 
-        verify(fixture.channelPlayService).stopPlay(fixture.channel);
+        verify(fixture.channelPlayService, never()).stopPlay(any());
     }
 
     @Test
-    void playbackTimeoutStopsTheCommonChannelWithoutGuessingStream() {
+    void playbackTimeoutCannotStopAnotherTimeWindow() {
         Fixture fixture = fixture();
         DeferredResult<WVPResult<StreamContent>> result = fixture.controller.playback(
                 mock(HttpServletRequest.class), 1, "2026-07-26 00:00:00", "2026-07-26 00:01:00");
 
         timeoutCallback(result).run();
 
-        verify(fixture.channelPlayService).stopPlayback(fixture.channel, null);
+        verify(fixture.channelPlayService, never()).stopPlayback(any(), any());
     }
 
     @Test

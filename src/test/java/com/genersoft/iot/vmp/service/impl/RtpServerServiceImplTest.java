@@ -85,6 +85,9 @@ class RtpServerServiceImplTest {
     @Test
     void successfulDepartureStillRunsTerminalCleanup() {
         RtpServerServiceImpl service = new RtpServerServiceImpl();
+        IMediaServerService media = mock(IMediaServerService.class);
+        when(media.probeStream(any(), eq("rtp"), eq("business"))).thenReturn(false);
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
         AtomicInteger cleanup = new AtomicInteger();
         RtpResourceContext context = new RtpResourceContext(
                 "resource-1", "business", "business", (code, msg, data) -> {}, cleanup::incrementAndGet);
@@ -101,6 +104,9 @@ class RtpServerServiceImplTest {
     @Test
     void departureWithoutOriginUrlMatchesBusinessStreamOwner() {
         RtpServerServiceImpl service = new RtpServerServiceImpl();
+        IMediaServerService media = mock(IMediaServerService.class);
+        when(media.probeStream(any(), eq("rtp"), eq("business"))).thenReturn(false);
+        ReflectionTestUtils.setField(service, "mediaServerService", media);
         AtomicInteger cleanup = new AtomicInteger();
         RtpResourceContext context = new RtpResourceContext(
                 "resource-business-owner", "business", "0000007B", (code, msg, data) -> {}, cleanup::incrementAndGet);
@@ -113,6 +119,25 @@ class RtpServerServiceImplTest {
 
         assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.CLOSED, context.getState());
         assertEquals(1, cleanup.get());
+    }
+
+    @Test
+    void departureWithoutOriginCannotClosePresentOrUnknownMedia() {
+        for (Boolean present : new Boolean[]{Boolean.TRUE, null}) {
+            RtpServerServiceImpl service = new RtpServerServiceImpl();
+            IMediaServerService media = mock(IMediaServerService.class);
+            when(media.probeStream(any(), eq("rtp"), eq("business"))).thenReturn(present);
+            ReflectionTestUtils.setField(service, "mediaServerService", media);
+            AtomicInteger cleanup = new AtomicInteger();
+            RtpResourceContext context = new RtpResourceContext(
+                    "resource-unknown", "business", "0000007B", (code, msg, data) -> {}, cleanup::incrementAndGet);
+            assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.WAITING_MEDIA));
+            assertTrue(context.transitionTo(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS));
+            installOwner(service, "media-1:rtp:business", context);
+            service.onApplicationEvent(departure("media-1", "rtp", "business", null));
+            assertEquals(com.genersoft.iot.vmp.service.bean.RtpResourceState.SUCCESS, context.getState());
+            assertEquals(0, cleanup.get());
+        }
     }
 
     @Test

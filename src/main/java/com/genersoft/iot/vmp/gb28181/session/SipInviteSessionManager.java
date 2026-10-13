@@ -6,6 +6,7 @@ import com.genersoft.iot.vmp.gb28181.bean.SsrcTransaction;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
@@ -36,6 +37,7 @@ public class SipInviteSessionManager {
     private static final int V2_RANGE_BATCH = 500;
     private static final long DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60L;
     private static final long META_GRACE_SECONDS = 60 * 60L;
+    private static final long DELETE_RETRY_DELAY_MILLIS = 5_000;
 
     @FunctionalInterface
     private interface TransactionWork {
@@ -48,9 +50,9 @@ public class SipInviteSessionManager {
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
-    /** 添加一个点播/回放事务。新写入只进入 V2。 */
-    public void put(SsrcTransaction transaction) {
-        putInternal(transaction, true);
+    /** 添加一个点播/回放事务。只有确认提交且未被停止准入拒绝时返回 true。 */
+    public boolean put(SsrcTransaction transaction) {
+        return putInternal(transaction, true);
     }
 
     private boolean putInternal(SsrcTransaction transaction, boolean allowStreamReplacement) {
@@ -72,6 +74,20 @@ public class SipInviteSessionManager {
         Map<String, String> metadata = metadata(transaction);
         java.util.concurrent.atomic.AtomicBoolean skipped = new java.util.concurrent.atomic.AtomicBoolean();
         boolean completed = executeTransaction(operations -> {
+            if (transaction.getInviteId() != null) {
+                String inviteKey = "WVP:INVITE:" + userSetting.getServerId() + ":DATA:" + transaction.getInviteId();
+                operations.watch(inviteKey);
+                Object raw = operations.opsForValue().get(inviteKey);
+                com.genersoft.iot.vmp.common.InviteInfo invite = raw == null ? null
+                        : com.alibaba.fastjson2.JSON.parseObject(com.alibaba.fastjson2.JSON.toJSONString(raw), com.genersoft.iot.vmp.common.InviteInfo.class);
+                if (invite == null || invite.getLifecycle().closing()
+                        || !java.util.Objects.equals(invite.getCallId(), transaction.getCallId())
+                        || !java.util.Objects.equals(invite.getStream(), transaction.getStream())
+                        || !java.util.Objects.equals(invite.getMediaServerId(), transaction.getMediaServerId())) {
+                    skipped.set(true);
+                    return true;
+                }
+            }
             operations.watch(List.of(streamKey, dataKey, metadataKey));
             String oldCallId = asString(operations.opsForValue().get(streamKey));
             SsrcTransaction old = asTransaction(operations.opsForValue().get(dataKey));
@@ -117,7 +133,7 @@ public class SipInviteSessionManager {
             }
             operations.opsForZSet().add(expireKey(), callId, transaction.getExpireAt());
             operations.opsForValue().set(metadataKey, metadata, ttl + META_GRACE_SECONDS, TimeUnit.SECONDS);
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
         return completed && !skipped.get();
     }
@@ -146,7 +162,7 @@ public class SipInviteSessionManager {
             }
             operations.multi();
             operations.delete(streamKey);
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
     }
 
@@ -201,15 +217,15 @@ public class SipInviteSessionManager {
         return new ArrayList<>(result.values());
     }
 
-    /** 删除流对应会话，且只允许当前 stream owner 删除。 */
-    public void removeByStream(String app, String stream) {
+    /** 删除流对应会话，且只允许当前 stream owner 删除；失败时登记补偿并返回 false。 */
+    public boolean removeByStream(String app, String stream) {
         SsrcTransaction transaction = getSsrcTransactionByStream(app, stream);
         if (transaction == null || isBlank(transaction.getCallId())) {
-            return;
+            return true;
         }
         String streamKey = streamKey(app, stream);
         String callId = transaction.getCallId();
-        executeTransaction(operations -> {
+        return executeDeleteTransaction("removeByStream", callId, operations -> {
             operations.watch(List.of(streamKey, dataKey(callId)));
             String owner = asString(operations.opsForValue().get(streamKey));
             if (!callId.equals(owner)) {
@@ -218,23 +234,23 @@ public class SipInviteSessionManager {
             SsrcTransaction current = asTransaction(operations.opsForValue().get(dataKey(callId)));
             operations.multi();
             queueDeleteSession(operations, current == null ? transaction : current, callId, true);
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
     }
 
     /** 删除流会话，但仅当当前 owner 的 SSRC 与调用方一致时执行。 */
-    public void removeByStreamIfSsrc(String app, String stream, String expectedSsrc) {
+    public boolean removeByStreamIfSsrc(String app, String stream, String expectedSsrc) {
         if (isBlank(expectedSsrc)) {
-            return;
+            return true;
         }
         SsrcTransaction transaction = getSsrcTransactionByStream(app, stream);
         if (transaction == null || !expectedSsrc.equals(transaction.getSsrc())
                 || isBlank(transaction.getCallId())) {
-            return;
+            return true;
         }
         String streamKey = streamKey(app, stream);
         String callId = transaction.getCallId();
-        executeTransaction(operations -> {
+        return executeDeleteTransaction("removeByStreamIfSsrc", callId, operations -> {
             operations.watch(List.of(streamKey, dataKey(callId)));
             String owner = asString(operations.opsForValue().get(streamKey));
             if (!callId.equals(owner)) {
@@ -246,32 +262,86 @@ public class SipInviteSessionManager {
             }
             operations.multi();
             queueDeleteSession(operations, current, callId, true);
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
     }
 
-    /** 删除 Call-ID 对应会话，重复调用安全。 */
-    public void removeByCallId(String callId) {
+    /** 删除 Call-ID 对应会话，重复调用安全；失败时登记补偿并返回 false。 */
+    public boolean removeByCallId(String callId) {
         if (isBlank(callId)) {
-            return;
+            return true;
         }
-        SsrcTransaction transaction = getSsrcTransactionByCallId(callId);
-        if (transaction == null) {
-            return;
-        }
-        String dataKey = dataKey(callId);
-        String streamKey = streamKey(transaction.getApp(), transaction.getStream());
-        executeTransaction(operations -> {
-            operations.watch(List.of(dataKey, streamKey, expireKey()));
-            SsrcTransaction current = asTransaction(operations.opsForValue().get(dataKey));
-            if (current == null || !callId.equals(current.getCallId())) {
-                return true;
+        SsrcTransaction transaction;
+        try {
+            // Terminal deletion must not renew the session it is about to remove.
+            transaction = getV2ByCallId(callId);
+            if (transaction == null) {
+                transaction = transactionFromMetadata(redisTemplate.opsForValue().get(metadataKey(callId)), callId);
             }
-            String owner = asString(operations.opsForValue().get(streamKey));
+            if (transaction == null) {
+                transaction = migrateLegacy(asTransaction(redisTemplate.opsForHash().get(legacyCallIdHashKey(), callId)));
+            }
+        } catch (RuntimeException e) {
+            registerDeleteFailure("removeByCallId lookup", callId, e);
+            return false;
+        }
+        SsrcTransaction snapshot = transaction;
+        String dataKey = dataKey(callId);
+        String metadataKey = metadataKey(callId);
+        return executeDeleteTransaction("removeByCallId", callId, operations -> {
+            // ZREM of another Call-ID must not invalidate this session's deletion.
+            operations.watch(List.of(dataKey, metadataKey));
+            SsrcTransaction current = asTransaction(operations.opsForValue().get(dataKey));
+            if (current == null) {
+                current = transactionFromMetadata(operations.opsForValue().get(metadataKey), callId);
+            }
+            if (current == null) {
+                current = snapshot;
+            }
+            if (current != null && !callId.equals(current.getCallId())) {
+                throw new IllegalStateException("SIP Invite session Call-ID mismatch: " + callId);
+            }
+            String streamKey = current == null ? null : streamKey(current.getApp(), current.getStream());
+            if (streamKey != null) {
+                operations.watch(streamKey);
+            }
+            String owner = streamKey == null ? null : asString(operations.opsForValue().get(streamKey));
             operations.multi();
             queueDeleteSession(operations, current, callId, callId.equals(owner));
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
+    }
+
+    /** Retry terminal deletion intents without waiting for device offline or the safety TTL. */
+    public int retryPendingSessionDeletes(int limit) {
+        int batchSize = Math.max(1, Math.min(limit, 100));
+        Set<Object> pending = redisTemplate.opsForZSet().rangeByScore(
+                pendingDeleteKey(), 0, System.currentTimeMillis(), 0, batchSize);
+        if (pending == null || pending.isEmpty()) {
+            return 0;
+        }
+        long started = System.nanoTime();
+        int removed = 0;
+        for (Object value : pending) {
+            String callId = asString(value);
+            if (isBlank(callId)) {
+                continue;
+            }
+            try {
+                if (!removeByCallId(callId)) {
+                    break;
+                }
+                removed++;
+            } catch (RuntimeException e) {
+                log.warn("[SIP Invite会话] 删除补偿失败，退避后重试：callId={}", callId, e);
+                // Avoid repeatedly hitting an unavailable Redis within the same batch.
+                break;
+            }
+            if (System.nanoTime() - started >= TimeUnit.MILLISECONDS.toNanos(500)) {
+                break;
+            }
+        }
+        return removed;
     }
 
     /**
@@ -352,12 +422,17 @@ public class SipInviteSessionManager {
         String metadataKey = metadataKey(callId);
         java.util.concurrent.atomic.AtomicBoolean expired = new java.util.concurrent.atomic.AtomicBoolean();
         boolean completed = executeTransaction(operations -> {
-            operations.watch(List.of(dataKey, metadataKey, expireKey()));
+            expired.set(false);
+            // Renewal writes DATA/META as well as the score; watching those guards this member.
+            operations.watch(List.of(dataKey, metadataKey));
             Double score = operations.opsForZSet().score(expireKey(), callId);
             if (score == null || score > now) {
                 return true;
             }
             SsrcTransaction transaction = asTransaction(operations.opsForValue().get(dataKey));
+            if (transaction != null && transaction.getExpireAt() != null && transaction.getExpireAt() > now) {
+                return true;
+            }
             if (transaction == null) {
                 transaction = transactionFromMetadata(operations.opsForValue().get(metadataKey), callId);
             }
@@ -372,10 +447,11 @@ public class SipInviteSessionManager {
                 operations.delete(dataKey);
                 operations.delete(metadataKey);
                 operations.opsForZSet().remove(expireKey(), callId);
+                operations.opsForZSet().remove(pendingDeleteKey(), callId);
             } else {
                 queueDeleteSession(operations, transaction, callId, callId.equals(owner));
             }
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
         return completed && expired.get();
     }
@@ -453,7 +529,7 @@ public class SipInviteSessionManager {
             operations.multi();
             operations.opsForHash().delete(legacyCallIdHashKey(), transaction.getCallId());
             operations.opsForHash().delete(legacyStreamHashKey(), streamField(transaction.getApp(), transaction.getStream()));
-            return operations.exec() != null;
+            return execSucceeded(operations);
         });
     }
 
@@ -477,8 +553,10 @@ public class SipInviteSessionManager {
         String streamKey = streamKey(transaction.getApp(), transaction.getStream());
         String metadataKey = metadataKey(callId);
         long expireAt = now + TimeUnit.SECONDS.toMillis(ttl);
+        java.util.concurrent.atomic.AtomicBoolean touched = new java.util.concurrent.atomic.AtomicBoolean();
         boolean refreshed = executeTransaction(operations -> {
-            operations.watch(List.of(dataKey, streamKey, metadataKey, expireKey()));
+            touched.set(false);
+            operations.watch(List.of(dataKey, streamKey, metadataKey));
             SsrcTransaction current = asTransaction(operations.opsForValue().get(dataKey));
             if (current == null || !callId.equals(current.getCallId())) {
                 return true;
@@ -493,9 +571,11 @@ public class SipInviteSessionManager {
             operations.opsForValue().set(streamKey, callId, ttl, TimeUnit.SECONDS);
             operations.opsForValue().set(metadataKey, metadata(current), ttl + META_GRACE_SECONDS, TimeUnit.SECONDS);
             operations.opsForZSet().add(expireKey(), callId, expireAt);
-            return operations.exec() != null;
+            boolean committed = execSucceeded(operations);
+            touched.set(committed);
+            return committed;
         });
-        if (refreshed) {
+        if (refreshed && touched.get()) {
             transaction.setExpireAt(expireAt);
         }
         return transaction;
@@ -512,27 +592,89 @@ public class SipInviteSessionManager {
             operations.opsForSet().remove(deviceKey(transaction.getDeviceId()), callId);
         }
         operations.opsForZSet().remove(expireKey(), callId);
+        operations.opsForZSet().remove(pendingDeleteKey(), callId);
+    }
+
+    private static boolean execSucceeded(RedisOperations<String, Object> operations) {
+        List<Object> result = operations.exec();
+        if (result == null || result.isEmpty()) {
+            return false;
+        }
+        for (Object value : result) {
+            if (value instanceof Throwable failure) {
+                throw new IllegalStateException("SIP Invite session Redis command failed", failure);
+            }
+        }
+        return true;
+    }
+
+    private boolean executeDeleteTransaction(String operation, String callId, TransactionWork callback) {
+        if (executeTransaction(operation, callId, callback)) {
+            return true;
+        }
+        registerDeleteFailure(operation, callId, null);
+        return false;
+    }
+
+    private void registerDeleteFailure(String operation, String callId, RuntimeException cause) {
+        try {
+            redisTemplate.opsForZSet().add(pendingDeleteKey(), callId,
+                    System.currentTimeMillis() + DELETE_RETRY_DELAY_MILLIS);
+            log.warn("[SIP Invite会话] 删除未完成，已登记删除补偿：operation={}, callId={}", operation, callId, cause);
+        } catch (RuntimeException e) {
+            if (cause != null) {
+                e.addSuppressed(cause);
+            }
+            log.error("[SIP Invite会话] 删除补偿登记失败：operation={}, callId={}", operation, callId, e);
+        }
+    }
+
+    private boolean executeTransaction(TransactionWork callback) {
+        return executeTransaction("transaction", null, callback);
     }
 
     @SuppressWarnings("unchecked")
-    private boolean executeTransaction(TransactionWork callback) {
+    private boolean executeTransaction(String operation, String callId, TransactionWork callback) {
+        RuntimeException lastFailure = null;
         for (int attempt = 1; attempt <= TRANSACTION_RETRIES; attempt++) {
             try {
                 Boolean completed = redisTemplate.execute(new SessionCallback<Boolean>() {
                     @Override
                     public <K, V> Boolean execute(RedisOperations<K, V> operations) {
-                        return callback.execute((RedisOperations<String, Object>) operations);
+                        RuntimeException failure = null;
+                        try {
+                            return callback.execute((RedisOperations<String, Object>) operations);
+                        } catch (RuntimeException e) {
+                            failure = e;
+                            throw e;
+                        } finally {
+                            try {
+                                redisTemplate.execute((RedisCallback<Void>) connection -> {
+                                    if (connection.isQueueing()) {
+                                        connection.discard();
+                                    }
+                                    connection.unwatch();
+                                    return null;
+                                });
+                            } catch (RuntimeException cleanupFailure) {
+                                if (failure != null) {
+                                    failure.addSuppressed(cleanupFailure);
+                                } else {
+                                    throw cleanupFailure;
+                                }
+                            }
+                        }
                     }
                 });
                 if (Boolean.TRUE.equals(completed)) {
                     return true;
                 }
             } catch (RuntimeException e) {
-                if (attempt == TRANSACTION_RETRIES) {
-                    log.error("[SIP Invite会话] Redis事务失败，重试耗尽", e);
-                }
+                lastFailure = e;
             }
         }
+        log.warn("[SIP Invite会话] Redis事务重试耗尽：operation={}, callId={}, attempts={}",
+                operation, callId, TRANSACTION_RETRIES, lastFailure);
         return false;
     }
 
@@ -559,6 +701,10 @@ public class SipInviteSessionManager {
 
     private String expireKey() {
         return VideoManagerConstants.SIP_INVITE_SESSION_V2_EXPIRE + serverId();
+    }
+
+    private String pendingDeleteKey() {
+        return VideoManagerConstants.SIP_INVITE_SESSION_V2_PENDING_DELETE + serverId();
     }
 
     private String metadataKey(String callId) {

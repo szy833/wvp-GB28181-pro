@@ -31,12 +31,28 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
 
 class SIPCommanderPlaybackCallIdTest {
 
     @Test
     void playbackSessionUsesCallIdFromTheActualInvite() throws Exception {
+        runPlayback(true, false);
+    }
+
+    @Test
+    void failedSipSessionCommitCannotReportPlaybackSuccess() throws Exception {
+        runPlayback(false, false);
+    }
+
+    @Test
+    void concurrentStopPreventsSipConfirmationAndPlaybackSuccess() throws Exception {
+        runPlayback(true, true);
+    }
+
+    private void runPlayback(boolean sessionCommitted, boolean stoppedDuringConfirmation) throws Exception {
         SIPCommander commander = new SIPCommander();
         SipLayer sipLayer = mock(SipLayer.class);
         SIPSender sipSender = mock(SIPSender.class);
@@ -88,7 +104,7 @@ class SIPCommanderPlaybackCallIdTest {
         }).when(sipSender).transmitRequest(anyString(), same(request), any(), any(), anyLong());
         doAnswer(invocation -> {
             stored[0] = invocation.getArgument(0);
-            return null;
+            return sessionCommitted;
         }).when(sessionManager).put(any(SsrcTransaction.class));
 
         ReflectionTestUtils.setField(commander, "sipLayer", sipLayer);
@@ -96,10 +112,39 @@ class SIPCommanderPlaybackCallIdTest {
         ReflectionTestUtils.setField(commander, "headerProvider", headerProvider);
         ReflectionTestUtils.setField(commander, "sessionManager", sessionManager);
         ReflectionTestUtils.setField(commander, "userSetting", userSetting);
+        var repository = mock(com.genersoft.iot.vmp.gb28181.service.impl.InviteRepository.class);
+        var invite = com.genersoft.iot.vmp.common.InviteInfo.prepare("device-1", channel.getId(),
+                com.genersoft.iot.vmp.common.InviteSessionType.PLAYBACK, "PLAYBACK:1:window", "media-1", "UDP", 60000);
+        ssrcInfo.setInviteId(invite.getInviteId());
+        when(request.getHeader(CallIdHeader.NAME)).thenReturn(actualCallId);
+        when(repository.patch(eq(invite.getInviteId()), eq("sip-intent"), any())).thenReturn(new com.genersoft.iot.vmp.common.InviteWriteResult(
+                com.genersoft.iot.vmp.common.InviteWriteResult.Code.APPLIED, invite));
+        when(repository.sipFinal(eq(invite.getInviteId()),eq("invite-call-id"),eq(true),any())).thenReturn(new com.genersoft.iot.vmp.common.InviteWriteResult(
+                com.genersoft.iot.vmp.common.InviteWriteResult.Code.APPLIED, invite));
+        when(repository.sipSessionConfirmed(invite.getInviteId(), "invite-call-id")).thenReturn(new com.genersoft.iot.vmp.common.InviteWriteResult(
+                stoppedDuringConfirmation ? com.genersoft.iot.vmp.common.InviteWriteResult.Code.STATE_CONFLICT
+                        : com.genersoft.iot.vmp.common.InviteWriteResult.Code.APPLIED, invite));
+        ReflectionTestUtils.setField(commander,"inviteRepository",repository);
+
+        SipSubscribe.Event success = mock(SipSubscribe.Event.class);
+        SipSubscribe.Event failure = mock(SipSubscribe.Event.class);
 
         commander.playbackStreamCmd(mediaServer, ssrcInfo, device, channel,
                 "2026-07-26 09:02:04", "2026-07-26 23:59:59",
-                event -> { }, event -> { }, 5000L);
+                success, failure, 5000L);
+
+        if (sessionCommitted && !stoppedDuringConfirmation) {
+            var order = inOrder(repository, sessionManager, success);
+            order.verify(repository).sipFinal(eq(invite.getInviteId()), eq("invite-call-id"), eq(true), any());
+            order.verify(sessionManager).put(any());
+            order.verify(repository).sipSessionConfirmed(invite.getInviteId(), "invite-call-id");
+            order.verify(success).response(any());
+            verify(failure, never()).response(any());
+        } else {
+            verify(success, never()).response(any());
+            verify(failure).response(any());
+            if (!sessionCommitted) verify(repository, never()).sipSessionConfirmed(anyString(), anyString());
+        }
 
         verify(sessionManager).put(any(SsrcTransaction.class));
         verify(sipSender, times(1)).getNewCallIdHeader("127.0.0.1", "UDP");
