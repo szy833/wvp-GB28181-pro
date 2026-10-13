@@ -1,15 +1,54 @@
 package metrics
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type BusinessCheck struct {
+	Attempted int    `json:"attempted"`
+	Succeeded int    `json:"succeeded"`
+	Available bool   `json:"available"`
+	Evidence  string `json:"evidence"`
+}
 
 type BusinessSummary struct {
-	RegisterSuccessRate float64 `json:"registerSuccessRate"`
-	CatalogSuccessRate  float64 `json:"catalogSuccessRate"`
-	PlaySuccessRate     float64 `json:"playSuccessRate"`
-	MediaSuccessRate    float64 `json:"mediaSuccessRate"`
-	StopSuccessRate     float64 `json:"stopSuccessRate"`
-	ControlLatencyP95   float64 `json:"controlLatencyP95"`
-	ControlLatencyP99   float64 `json:"controlLatencyP99"`
+	Checks              map[string]BusinessCheck `json:"checks,omitempty"`
+	RegisterSuccessRate float64                  `json:"registerSuccessRate"`
+	CatalogSuccessRate  float64                  `json:"catalogSuccessRate"`
+	PlaySuccessRate     float64                  `json:"playSuccessRate"`
+	MediaSuccessRate    float64                  `json:"mediaSuccessRate"`
+	StopSuccessRate     float64                  `json:"stopSuccessRate"`
+	ControlLatencyP95   float64                  `json:"controlLatencyP95"`
+	ControlLatencyP99   float64                  `json:"controlLatencyP99"`
+}
+
+func (b BusinessSummary) MarshalJSON() ([]byte, error) {
+	type plain BusinessSummary
+	data, err := json.Marshal(plain(b))
+	if err != nil {
+		return nil, err
+	}
+	if b.Checks == nil {
+		return data, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"register", "catalog", "play", "media", "stop"} {
+		if !b.Checks[name].Available {
+			fields[name+"SuccessRate"] = json.RawMessage("null")
+		}
+	}
+	return json.Marshal(fields)
+}
+
+func (b BusinessSummary) FormatRate(name string, value float64) string {
+	if b.Checks != nil && !b.Checks[name].Available {
+		return "N/A"
+	}
+	return fmt.Sprintf("%.4f", value)
 }
 
 type ResourceSummary struct {
@@ -38,6 +77,10 @@ type SLOThresholds struct {
 }
 
 type SLOInput struct {
+	RequireCleanupChecks     bool
+	SessionsAvailable        bool
+	ListenersAvailable       bool
+	ResidualListeners        int
 	Business                 BusinessSummary
 	Resources                map[string]ResourceSummary
 	ZLMAvailable             bool
@@ -71,6 +114,14 @@ func EvaluateSLO(input SLOInput) Verdict {
 		{"stop success rate", b.StopSuccessRate, input.SLO.StopSuccessRate},
 	}
 	for _, check := range checks {
+		key := map[string]string{"REGISTER success rate": "register", "Catalog success rate": "catalog", "play success rate": "play", "media success rate": "media", "stop success rate": "stop"}[check.name]
+		if b.Checks != nil && !b.Checks[key].Available {
+			if check.limit > 0 {
+				result.MonitoringComplete = false
+				result.FailureReasons = append(result.FailureReasons, check.name+" not tested / N/A")
+			}
+			continue
+		}
 		if check.limit > 0 && check.value < check.limit {
 			result.BusinessSLOPassed = false
 			result.FailureReasons = append(result.FailureReasons, fmt.Sprintf("%s %.4f < %.4f", check.name, check.value, check.limit))
@@ -95,6 +146,16 @@ func EvaluateSLO(input SLOInput) Verdict {
 	if !input.ResidualStreamsAvailable && input.ZLMAvailable {
 		result.MonitoringComplete = false
 		result.FailureReasons = append(result.FailureReasons, "final ZLM stream snapshot unavailable")
+	}
+	if input.RequireCleanupChecks {
+		if !input.SessionsAvailable || !input.ListenersAvailable {
+			result.MonitoringComplete = false
+			result.FailureReasons = append(result.FailureReasons, "scoped WVP session / ZLM listener cleanup check unavailable")
+		}
+		if input.ListenersAvailable && input.ResidualListeners > 0 {
+			result.BusinessSLOPassed = false
+			result.FailureReasons = append(result.FailureReasons, fmt.Sprintf("residual RTP listeners %d > 0", input.ResidualListeners))
+		}
 	}
 	for name, resource := range input.Resources {
 		if !resource.Available || resource.Samples == 0 {

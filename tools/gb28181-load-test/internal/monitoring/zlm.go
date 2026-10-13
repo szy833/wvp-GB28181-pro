@@ -27,16 +27,25 @@ type ZLMStream struct {
 
 // ZLMSnapshot represents one point-in-time getMediaList response.
 type ZLMSnapshot struct {
-	MediaServerID     string      `json:"mediaServerId,omitempty"`
-	Available         bool        `json:"available"`
-	SampledAt         time.Time   `json:"sampledAt"`
-	TotalStreams      int         `json:"totalStreams"`
-	RTPStreams        int         `json:"rtpStreams"`
-	BusinessStreams   int         `json:"businessStreams"`
-	Streams           []ZLMStream `json:"streams,omitempty"`
-	APILatencySeconds float64     `json:"apiLatencySeconds"`
-	Error             string      `json:"error,omitempty"`
-	HTTPStatus        int         `json:"httpStatus,omitempty"`
+	ScopeFiltered      bool        `json:"scopeFiltered"`
+	NodeTotalStreams   int         `json:"nodeTotalStreams"`
+	ResidualListeners  int         `json:"residualListeners"`
+	ListenersAvailable bool        `json:"listenersAvailable"`
+	ResidualSessions   int         `json:"residualSessions"`
+	SessionsAvailable  bool        `json:"sessionsAvailable"`
+	CleanupSeconds     float64     `json:"cleanupSeconds"`
+	CleanupTimedOut    bool        `json:"cleanupTimedOut"`
+	CleanupErrors      []string    `json:"cleanupErrors,omitempty"`
+	MediaServerID      string      `json:"mediaServerId,omitempty"`
+	Available          bool        `json:"available"`
+	SampledAt          time.Time   `json:"sampledAt"`
+	TotalStreams       int         `json:"totalStreams"`
+	RTPStreams         int         `json:"rtpStreams"`
+	BusinessStreams    int         `json:"businessStreams"`
+	Streams            []ZLMStream `json:"streams,omitempty"`
+	APILatencySeconds  float64     `json:"apiLatencySeconds"`
+	Error              string      `json:"error,omitempty"`
+	HTTPStatus         int         `json:"httpStatus,omitempty"`
 }
 
 // ZLMClient queries ZLMediaKit's getMediaList API. Secret is only sent as a

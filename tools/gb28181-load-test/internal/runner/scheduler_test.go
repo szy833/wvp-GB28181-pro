@@ -16,6 +16,21 @@ type recordingController struct {
 	stops  int
 }
 
+func TestSchedulerDoesNotOverlapSameDevice(t *testing.T) {
+	idf, _ := device.NewIdentityFactory("overlap", "loadtest-", "3402")
+	id, _ := idf.New(0)
+	c := &recordingController{}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	s := &PlayScheduler{Controller: c, Rate: 1000, MaxConcurrent: 10, Duration: time.Second}
+	s.Run(ctx, []*device.Device{device.New(id, device.DeviceHooks{})})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.starts != 1 {
+		t.Fatalf("same device had %d overlapping plays", c.starts)
+	}
+}
+
 func (c *recordingController) Start(context.Context, *device.Device) error {
 	c.mu.Lock()
 	c.starts++

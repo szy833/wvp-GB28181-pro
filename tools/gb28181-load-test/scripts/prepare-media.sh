@@ -12,12 +12,12 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "未找到 ffmpeg，请先安装 ffmpeg" >&2
   exit 1
 fi
-# FFmpeg names the MPEG program-stream muxer "mpeg"; "mpegps" is not a
-# portable muxer name and is rejected by common FFmpeg builds.
-if ! ffmpeg -hide_banner -loglevel error -y -i "$input" -map 0:v:0 -an -c:v copy -f mpeg "$output"; then
-	echo "视频流无法直接封装为 MPEG-PS，尝试转码为 H.264 视频" >&2
-	# WVP's GB28181 RTP profile requests H.264 (only_track=2); MPEG-2 PS
-	# files may be accepted by ZLM but cannot produce a usable H.264 track.
-	ffmpeg -hide_banner -loglevel error -y -i "$input" -map 0:v:0 -an -c:v libx264 -preset veryfast -tune zerolatency -x264-params repeat-headers=1 -f mpeg "$output"
+tool=${GB28181_LOADTEST_BIN:-./bin/gb28181-load-test}
+fps=${GB28181_MEDIA_FPS:-25}
+if [ ! -x "$tool" ]; then
+  echo "未找到工具二进制 $tool，请先构建最新版本或设置 GB28181_LOADTEST_BIN" >&2
+  exit 1
 fi
-echo "已生成 $output"
+# Generic FFmpeg mpeg/vob muxers may aggregate frames or omit PES timestamps.
+# The offline tool mode generates one timestamped access unit per PS pack.
+exec "$tool" -prepare-media "$input" -media-output "$output" -media-fps "$fps"

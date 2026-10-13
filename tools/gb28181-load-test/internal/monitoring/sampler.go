@@ -37,14 +37,16 @@ type ZLMStreamLister interface {
 // ResourceSampler periodically samples Prometheus and ZLM. All requests use a
 // per-round timeout and the output channel has a hard upper bound.
 type ResourceSampler struct {
-	Interval     time.Duration
-	QueryTimeout time.Duration
-	Step         time.Duration
-	Prometheus   PrometheusClient
-	Queries      map[string]string
-	ZLM          ZLMStreamLister
-	MaxSamples   int
-	BufferSize   int
+	CleanupTimeout time.Duration
+	FinalSnapshot  func(context.Context) (ZLMSnapshot, error)
+	Interval       time.Duration
+	QueryTimeout   time.Duration
+	Step           time.Duration
+	Prometheus     PrometheusClient
+	Queries        map[string]string
+	ZLM            ZLMStreamLister
+	MaxSamples     int
+	BufferSize     int
 }
 
 func (s *ResourceSampler) normalized() (interval, timeout, step time.Duration, max, buffer int) {
@@ -172,8 +174,32 @@ func (s *ResourceSampler) Start(ctx context.Context, start time.Time) <-chan Res
 				// A final snapshot is useful for residual stream checks, but do
 				// not make shutdown wait for an unavailable Prometheus endpoint.
 				if s.ZLM != nil {
-					finalCtx, cancel := context.WithTimeout(context.Background(), timeout)
-					snapshot, err := s.ZLM.ListStreams(finalCtx)
+					grace := s.CleanupTimeout
+					if grace <= 0 {
+						grace = timeout
+					}
+					finalCtx, cancel := context.WithTimeout(context.Background(), grace)
+					fetch := s.FinalSnapshot
+					if fetch == nil {
+						fetch = func(ctx context.Context) (ZLMSnapshot, error) {
+							var snapshot ZLMSnapshot
+							var err error
+							for {
+								snapshot, err = s.ZLM.ListStreams(ctx)
+								if snapshot.Available && snapshot.BusinessStreams == 0 {
+									return snapshot, err
+								}
+								timer := time.NewTimer(50 * time.Millisecond)
+								select {
+								case <-ctx.Done():
+									timer.Stop()
+									return snapshot, err
+								case <-timer.C:
+								}
+							}
+						}
+					}
+					snapshot, err := fetch(finalCtx)
 					cancel()
 					if err != nil && snapshot.Error == "" {
 						snapshot.Error = "ZLM final query failed"

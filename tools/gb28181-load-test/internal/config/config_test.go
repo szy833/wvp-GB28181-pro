@@ -183,7 +183,7 @@ func TestMonitoringEnabledRequiresValidEndpoints(t *testing.T) {
 		text string
 		want string
 	}{
-		{"prometheus url", validYAML() + "monitoring:\n  enabled: true\n", "prometheus.url"},
+		{"monitoring source", validYAML() + "monitoring:\n  enabled: true\n", "monitoring source"},
 		{"zlm url", validYAML() + "monitoring:\n  enabled: true\n  prometheus:\n    url: http://127.0.0.1:9090\n  zlm:\n    enabled: true\n", "zlm.url"},
 		{"sample interval", monitoringYAML() + "", ""},
 	}
@@ -194,6 +194,13 @@ func TestMonitoringEnabledRequiresValidEndpoints(t *testing.T) {
 				t.Fatalf("error=%v, want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestMonitoringAllowsZLMWithoutPrometheus(t *testing.T) {
+	_, err := Load(writeConfig(t, validYAML()+"monitoring:\n  enabled: true\n  zlm:\n    enabled: true\n    url: http://127.0.0.1:19001\n"))
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

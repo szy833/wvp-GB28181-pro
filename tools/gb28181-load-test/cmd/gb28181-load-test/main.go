@@ -27,12 +27,16 @@ type deviceFactory struct {
 	identities *device.IdentityFactory
 	cfg        config.Config
 	media      *rtp.SharedMedia
+	scope      *monitoring.ResourceScope
 }
 
 func (f deviceFactory) New(index int) (*device.Device, error) {
 	id, err := f.identities.New(index)
 	if err != nil {
 		return nil, err
+	}
+	if f.scope != nil {
+		f.scope.AddDevice(id.DeviceID, id.ChannelID)
 	}
 	local := f.cfg.SIP.Local
 	if local == "" {
@@ -62,6 +66,13 @@ func (f deviceFactory) New(index int) (*device.Device, error) {
 	}
 	hooks := device.DeviceHooks{Transport: tr, Peer: peer, Local: net.JoinHostPort(advertiseHost, strconv.Itoa(localAddr.Port)), Target: "sip:server@" + f.cfg.SIP.Address, Username: username, Password: f.cfg.Device.Password, Realm: f.cfg.Device.Realm, ServerID: f.cfg.Device.ServerID, Name: f.cfg.Device.Name, Manufacturer: f.cfg.Device.Manufacturer, Model: f.cfg.Device.Model, NoMedia: strings.EqualFold(f.cfg.Scenario.Name, "no-media-timeout"), DeviceByeAfter: byeAfter, RegisterInterval: f.cfg.RegisterTTL, KeepaliveInterval: f.cfg.Keepalive}
 	hooks.SenderFactory = func(offer sip.SDPResponse) (device.MediaSender, string, error) {
+		value, err := strconv.ParseUint(offer.SSRC, 10, 32)
+		if err != nil || value == 0 {
+			return nil, "", fmt.Errorf("invalid SSRC in INVITE SDP")
+		}
+		if f.scope != nil {
+			f.scope.AddSSRC(uint32(value))
+		}
 		if f.media == nil {
 			return nil, "", fmt.Errorf("shared media is not loaded")
 		}
@@ -70,10 +81,9 @@ func (f deviceFactory) New(index int) (*device.Device, error) {
 			if strings.EqualFold(offer.Setup, "passive") {
 				mode = "TCP-ACTIVE"
 			}
-			return nil, sip.BuildPlaySDP(sip.SDPRequest{Address: "0.0.0.0", Port: offer.Port, SSRC: id.SSRC, Mode: mode}), nil
+			return nil, sip.BuildAnswerSDP(sip.SDPRequest{Address: advertiseHost, Port: offer.Port, SSRC: offer.SSRC, Mode: mode}), nil
 		}
 		source := f.media.NewReader(1200)
-		value, _ := strconv.ParseUint(id.SSRC, 10, 64)
 		if strings.EqualFold(offer.Setup, "passive") || strings.Contains(strings.ToUpper(offer.Protocol), "TCP") {
 			target, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(offer.Address, strconv.Itoa(offer.Port)))
 			if err != nil {
@@ -81,8 +91,8 @@ func (f deviceFactory) New(index int) (*device.Device, error) {
 				return nil, "", err
 			}
 			sender := rtp.NewTCPPSender(target, source, uint32(value))
-			answer := sip.BuildPlaySDP(sip.SDPRequest{Address: "0.0.0.0", Port: offer.Port, SSRC: id.SSRC, Mode: "TCP-ACTIVE"})
-			return &senderAdapter{start: sender.Start, stop: func() error { err := sender.Stop(); _ = source.Close(); return err }}, answer, nil
+			answer := sip.BuildAnswerSDP(sip.SDPRequest{Address: advertiseHost, Port: offer.Port, SSRC: offer.SSRC, Mode: "TCP-ACTIVE"})
+			return &senderAdapter{start: sender.Start, stats: sender.Stats, stop: func() error { err := sender.Stop(); _ = source.Close(); return err }}, answer, nil
 		}
 		target, err := net.ResolveUDPAddr("udp", net.JoinHostPort(offer.Address, strconv.Itoa(offer.Port)))
 		if err != nil {
@@ -96,15 +106,23 @@ func (f deviceFactory) New(index int) (*device.Device, error) {
 		}
 		sender := rtp.NewSender(conn, target, source, uint32(value))
 		localAddr := conn.LocalAddr().(*net.UDPAddr)
-		answer := sip.BuildPlaySDP(sip.SDPRequest{Address: advertiseHost, Port: localAddr.Port, SSRC: id.SSRC, Mode: "UDP"})
-		return &senderAdapter{start: sender.Start, stop: func() error { err := sender.Stop(); _ = source.Close(); _ = conn.Close(); return err }}, answer, nil
+		answer := sip.BuildAnswerSDP(sip.SDPRequest{Address: advertiseHost, Port: localAddr.Port, SSRC: offer.SSRC, Mode: "UDP"})
+		return &senderAdapter{start: sender.Start, stats: sender.Stats, stop: func() error { err := sender.Stop(); _ = source.Close(); _ = conn.Close(); return err }}, answer, nil
 	}
 	return device.New(id, hooks), nil
 }
 
 type senderAdapter struct {
+	stats func() rtp.SenderStats
 	start func(context.Context) error
 	stop  func() error
+}
+
+func (s *senderAdapter) Stats() rtp.SenderStats {
+	if s.stats == nil {
+		return rtp.SenderStats{}
+	}
+	return s.stats()
 }
 
 func (s *senderAdapter) Start(ctx context.Context) error { return s.start(ctx) }
@@ -113,7 +131,19 @@ func netResolve(address string) (*net.UDPAddr, error)    { return net.ResolveUDP
 
 func main() {
 	path := flag.String("config", "configs/example.yaml", "配置文件")
+	prepareInput := flag.String("prepare-media", "", "离线生成逐帧 MPEG-2 PS 的视频输入")
+	prepareOutput := flag.String("media-output", "media/sample.ps", "离线生成的 PS 路径（不覆盖已有文件）")
+	prepareFPS := flag.Int("media-fps", 25, "离线素材固定帧率（1..120）")
 	flag.Parse()
+	if *prepareInput != "" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		if err := rtp.PrepareMedia(ctx, *prepareInput, *prepareOutput, *prepareFPS); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("已生成逐帧 MPEG-2 PS：%s，帧率：%d\n", *prepareOutput, *prepareFPS)
+		return
+	}
 	cfg, err := config.Load(*path)
 	if err != nil {
 		log.Fatal(err)
@@ -147,28 +177,41 @@ func main() {
 			prometheusClient = monitoring.NewPrometheusClient(cfg.Monitoring.Prometheus.URL, cfg.Monitoring.Prometheus.QueryTimeout)
 		}
 		var zlmClient monitoring.ZLMStreamLister
+		var finalSnapshot func(context.Context) (monitoring.ZLMSnapshot, error)
+		scope := monitoring.NewResourceScope()
 		if cfg.Monitoring.ZLM.Enabled && cfg.Monitoring.ZLM.URL != "" {
-			zlmClient = monitoring.NewZLMClient(cfg.Monitoring.ZLM.URL, cfg.Monitoring.ZLM.Secret, cfg.Monitoring.ZLM.MediaServerID, cfg.Monitoring.Prometheus.QueryTimeout)
+			client := &monitoring.ScopedZLM{Client: monitoring.NewZLMClient(cfg.Monitoring.ZLM.URL, cfg.Monitoring.ZLM.Secret, cfg.Monitoring.ZLM.MediaServerID, cfg.Monitoring.Prometheus.QueryTimeout), Scope: scope}
+			zlmClient = client
+			poller := &monitoring.CleanupPoller{ZLM: client, Interval: cfg.Monitoring.CleanupInterval}
+			if cfg.Control.BaseURL != "" {
+				poller.WVP = &monitoring.WVPClient{BaseURL: cfg.Control.BaseURL, Token: cfg.Control.Token, Timeout: cfg.Monitoring.Prometheus.QueryTimeout, Scope: scope}
+			}
+			finalSnapshot = poller.Wait
 		}
-		sampler := &monitoring.ResourceSampler{Interval: cfg.Monitoring.SampleInterval, QueryTimeout: cfg.Monitoring.Prometheus.QueryTimeout, Step: cfg.Monitoring.Prometheus.Step, Prometheus: prometheusClient, Queries: monitoringQueries(cfg.Monitoring.Prometheus.Queries), ZLM: zlmClient}
+		sampler := &monitoring.ResourceSampler{CleanupTimeout: cfg.Monitoring.CleanupTimeout, FinalSnapshot: finalSnapshot, Interval: cfg.Monitoring.SampleInterval, QueryTimeout: cfg.Monitoring.Prometheus.QueryTimeout, Step: cfg.Monitoring.Prometheus.Step, Prometheus: prometheusClient, Queries: monitoringQueries(cfg.Monitoring.Prometheus.Queries), ZLM: zlmClient}
 		resourceChannel := sampler.Start(samplerCtx, time.Now())
+		// Drain during the workload so long runs retain their bounded sample budget.
+		samplesDone := make(chan struct{})
+		go func() {
+			defer close(samplesDone)
+			for sample := range resourceChannel {
+				resourceSamples = append(resourceSamples, sample)
+			}
+		}()
 		r := runner.Runner{Metrics: reg, PlayRate: cfg.Scenario.PlayRate, MaxConcurrent: cfg.Scenario.MaxConcurrent, PlayDuration: cfg.Scenario.PlayDuration, StartupGrace: cfg.Scenario.StartupGrace}
 		if cfg.Control.BaseURL != "" {
-			r.PlayController = &runner.HTTPPlayController{BaseURL: cfg.Control.BaseURL, Token: cfg.Control.Token, StartPath: cfg.Control.StartPath, StopPath: cfg.Control.StopPath, Metrics: reg}
+			r.PlayController = &runner.HTTPPlayController{BaseURL: cfg.Control.BaseURL, Token: cfg.Control.Token, StartPath: cfg.Control.StartPath, StopPath: cfg.Control.StopPath, Metrics: reg, OnMedia: scope.AddStream}
 		}
-		report, err := r.Run(runCtx, cfg, deviceFactory{identities: ids, cfg: cfg, media: media})
+		report, err := r.Run(runCtx, cfg, deviceFactory{identities: ids, cfg: cfg, media: media, scope: scope})
 		if err != nil {
 			stopSampler()
-			for range resourceChannel {
-			}
+			<-samplesDone
 			log.Fatal(err)
 		}
 		// Stop sampling only after Runner cleanup has completed so the final
 		// ZLM snapshot reflects post-test residual streams.
 		stopSampler()
-		for sample := range resourceChannel {
-			resourceSamples = append(resourceSamples, sample)
-		}
+		<-samplesDone
 		report.ResourceSamples = resourceSamples
 		finalizeMonitoring(&report, cfg.Monitoring.SLO, cfg.Monitoring.ZLM.Enabled)
 		if cfg.Report.ResourcesCSV == "" && cfg.Report.CSV != "" {
@@ -189,26 +232,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if cfg.Report.JSON != "" {
-		if err := metrics.WriteJSON(cfg.Report.JSON, report); err != nil {
-			log.Fatal(err)
-		}
-	}
-	if cfg.Report.CSV != "" {
-		if err := metrics.WriteCSV(cfg.Report.CSV, report); err != nil {
-			log.Fatal(err)
-		}
-	}
-	detailPath := cfg.Report.DetailCSV
-	if detailPath == "" && cfg.Report.CSV != "" {
-		detailPath = metrics.DetailCSVPath(cfg.Report.CSV)
-	}
-	if detailPath != "" {
-		if err := metrics.WriteDetailCSV(detailPath, report); err != nil {
-			log.Fatal(err)
-		}
-	}
-	metrics.PrintSummary(os.Stdout, report, detailPath)
+	finalizeMonitoring(&report, cfg.Monitoring.SLO, cfg.Monitoring.ZLM.Enabled)
+	writeReports(cfg, report)
+	metrics.PrintSummary(os.Stdout, report, detailPath(cfg))
 }
 
 func detailPath(cfg config.Config) string {
@@ -284,6 +310,14 @@ func finalizeMonitoring(report *metrics.Report, slo config.SLOConfig, zlmRequire
 			if sample.Metric == "final_streams" {
 				report.ZLM.ResidualStreams = sample.ZLM.BusinessStreams
 				report.ZLM.ResidualAvailable = sample.ZLM.Available
+				report.ZLM.ResidualListeners = sample.ZLM.ResidualListeners
+				report.ZLM.ListenersAvailable = sample.ZLM.ListenersAvailable
+				report.ZLM.ResidualSessions = sample.ZLM.ResidualSessions
+				report.ZLM.SessionsAvailable = sample.ZLM.SessionsAvailable
+				report.ZLM.ScopeFiltered = sample.ZLM.ScopeFiltered
+				report.ZLM.CleanupSeconds = sample.ZLM.CleanupSeconds
+				report.ZLM.CleanupTimedOut = sample.ZLM.CleanupTimedOut
+				report.ZLM.CleanupErrors = sample.ZLM.CleanupErrors
 			}
 			if !sample.ZLM.Available {
 				report.ZLM.APIErrorCount++
@@ -291,7 +325,29 @@ func finalizeMonitoring(report *metrics.Report, slo config.SLOConfig, zlmRequire
 		}
 	}
 	input := metrics.SLOInput{Business: report.Business, Resources: report.Resources, ZLMAvailable: !zlmRequired || report.ZLM.Available, ResidualStreams: report.ZLM.ResidualStreams, ResidualStreamsAvailable: !zlmRequired || report.ZLM.ResidualAvailable, MonitoringComplete: len(report.ResourceSamples) > 0, SLO: metrics.SLOThresholds{RegisterSuccessRate: slo.RegisterSuccessRate, CatalogSuccessRate: slo.CatalogSuccessRate, PlaySuccessRate: slo.PlaySuccessRate, MediaSuccessRate: slo.MediaSuccessRate, StopSuccessRate: slo.StopSuccessRate, ControlLatencyP95Seconds: slo.ControlLatencyP95Seconds, ControlLatencyP99Seconds: slo.ControlLatencyP99Seconds, MaxResidualSessions: slo.MaxResidualSessions, MaxResidualStreams: slo.MaxResidualStreams, MaxCPUPercent: slo.MaxCPUPercent, MaxJVMHeapPercent: slo.MaxJVMHeapPercent, MaxRedisCPUPercent: slo.MaxRedisCPUPercent, MaxNetworkPercent: slo.MaxNetworkPercent}}
+	input.RequireCleanupChecks = true
+	input.ResidualSessions = report.ZLM.ResidualSessions
+	input.SessionsAvailable = report.ZLM.SessionsAvailable
+	input.ResidualListeners = report.ZLM.ResidualListeners
+	input.ListenersAvailable = report.ZLM.ListenersAvailable
+	if !report.ZLM.ScopeFiltered {
+		input.ResidualStreamsAvailable = false
+	}
 	report.Summary = metrics.EvaluateSLO(input)
+	for _, d := range report.Devices {
+		if d.RTPErrors > 0 || d.DeviceByeErrors > 0 || d.DeviceByeTimeouts > 0 {
+			report.Summary.Name = "FAIL"
+			report.Summary.BusinessSLOPassed = false
+			report.Summary.FailureReasons = append(report.Summary.FailureReasons, fmt.Sprintf("device %s: RTP errors=%d BYE errors=%d timeouts=%d", d.DeviceID, d.RTPErrors, d.DeviceByeErrors, d.DeviceByeTimeouts))
+		}
+	}
+	if report.ZLM.CleanupTimedOut {
+		report.Summary.MonitoringComplete = false
+		report.Summary.FailureReasons = append(report.Summary.FailureReasons, "cleanup grace expired before confirmed convergence")
+		if report.Summary.Name != "FAIL" {
+			report.Summary.Name = "INCONCLUSIVE"
+		}
+	}
 }
 
 func startMetricsServer(address string, registry *metrics.Registry) *http.Server {

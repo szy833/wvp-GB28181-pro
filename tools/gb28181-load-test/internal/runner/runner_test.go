@@ -22,7 +22,7 @@ func (f factory) New(i int) (*device.Device, error) {
 func TestResultCollectorJoinsOutOfOrderPlayEvents(t *testing.T) {
 	collector := newResultCollector(metrics.NewRegistry())
 	started := time.Now()
-	collector.OnPlayEvent("device-1", "media_started", started.Add(2*time.Second))
+	collector.OnPlayEvent("device-1", "media_confirmed", started.Add(2*time.Second))
 	collector.RecordPlay(metrics.PlayResult{ID: "p1", DeviceID: "device-1", StartedAt: started, StartSuccess: true})
 	collector.OnPlayEvent("device-1", "invite_success", started.Add(time.Second))
 	plays := collector.PlayResults()

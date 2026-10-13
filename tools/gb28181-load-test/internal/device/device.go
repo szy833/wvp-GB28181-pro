@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/shizy/gb28181-load-test/internal/rtp"
 	"github.com/shizy/gb28181-load-test/internal/sip"
 )
 
@@ -27,11 +29,16 @@ type MediaSender interface {
 	Stop() error
 }
 type DeviceEvent struct {
-	Name      string
-	DeviceID  string
-	ChannelID string
-	Error     string
-	At        time.Time
+	Packets, Bytes, MediaErrors                            uint64
+	LocalCancellations, RemoteClosures, DiagnosticsDropped uint64
+	Diagnostics                                            []rtp.SendDiagnostic
+	CallID                                                 string
+	State                                                  string
+	Name                                                   string
+	DeviceID                                               string
+	ChannelID                                              string
+	Error                                                  string
+	At                                                     time.Time
 }
 type EventSink interface{ OnDeviceEvent(DeviceEvent) }
 type DeviceHooks struct {
@@ -53,24 +60,35 @@ type DeviceHooks struct {
 	RegisterInterval  time.Duration
 	KeepaliveInterval time.Duration
 	MediaTimeout      time.Duration
+	ByeTimeout        time.Duration
 }
 
 type Device struct {
-	Identity     Identity
-	Hooks        DeviceHooks
-	mu           sync.Mutex
-	eventMu      sync.RWMutex
-	eventSink    EventSink
-	state        State
-	active       bool
-	dialog       sip.Dialog
-	runCancel    context.CancelFunc
-	wg           sync.WaitGroup
-	byeSent      bool
-	digest       sip.DigestChallenge
-	registerCSeq uint32
-	messageCSeq  uint32
-	nonceCount   uint32
+	Identity       Identity
+	Hooks          DeviceHooks
+	mu             sync.Mutex
+	eventMu        sync.RWMutex
+	eventSink      EventSink
+	state          State
+	active         bool
+	dialog         sip.Dialog
+	runCancel      context.CancelFunc
+	wg             sync.WaitGroup
+	byeSent        bool
+	digest         sip.DigestChallenge
+	registerCSeq   uint32
+	messageCSeq    uint32
+	nonceCount     uint32
+	mediaRunning   bool
+	inviteResponse []byte
+	byeReply       chan error
+	stopMu         sync.Mutex
+	closeOnce      sync.Once
+	closeDone      chan struct{}
+	closeErr       error
+	lastStats      rtp.SenderStats
+	stopping       bool
+	shuttingDown   bool
 }
 
 func New(id Identity, hooks DeviceHooks) *Device {
@@ -83,6 +101,9 @@ func New(id Identity, hooks DeviceHooks) *Device {
 	if hooks.MediaTimeout <= 0 {
 		hooks.MediaTimeout = 10 * time.Second
 	}
+	if hooks.ByeTimeout <= 0 {
+		hooks.ByeTimeout = 3 * time.Second
+	}
 	if hooks.Name == "" {
 		hooks.Name = id.DeviceID
 	}
@@ -92,7 +113,7 @@ func New(id Identity, hooks DeviceHooks) *Device {
 	if hooks.Model == "" {
 		hooks.Model = "virtual-camera"
 	}
-	return &Device{Identity: id, Hooks: hooks, state: StateCreated, registerCSeq: 1, messageCSeq: 1}
+	return &Device{Identity: id, Hooks: hooks, state: StateCreated, registerCSeq: 1, messageCSeq: 1, closeDone: make(chan struct{})}
 }
 func (d *Device) SetEventSink(sink EventSink) {
 	d.eventMu.Lock()
@@ -107,6 +128,46 @@ func (d *Device) emit(name, channelID, errText string) {
 		sink.OnDeviceEvent(DeviceEvent{Name: name, DeviceID: d.Identity.DeviceID, ChannelID: channelID, Error: errText, At: time.Now()})
 	}
 }
+
+func (d *Device) emitMediaStats() {
+	d.mu.Lock()
+	measured, ok := d.Hooks.Sender.(interface{ Stats() rtp.SenderStats })
+	if !ok {
+		d.mu.Unlock()
+		return
+	}
+	stats := measured.Stats()
+	prev := d.lastStats
+	d.lastStats = stats
+	callID, state := d.dialog.CallID, string(d.state)
+	d.mu.Unlock()
+	if stats.Packets < prev.Packets || stats.Bytes < prev.Bytes || stats.Errors < prev.Errors || stats.LocalCancellations < prev.LocalCancellations || stats.RemoteClosures < prev.RemoteClosures || stats.DiagnosticsDropped < prev.DiagnosticsDropped {
+		return
+	}
+	e := DeviceEvent{Name: "media_stats", DeviceID: d.Identity.DeviceID, ChannelID: d.Identity.ChannelID, At: time.Now(), Packets: stats.Packets - prev.Packets, Bytes: stats.Bytes - prev.Bytes, MediaErrors: stats.Errors - prev.Errors}
+	e.LocalCancellations = stats.LocalCancellations - prev.LocalCancellations
+	e.RemoteClosures = stats.RemoteClosures - prev.RemoteClosures
+	e.DiagnosticsDropped = stats.DiagnosticsDropped - prev.DiagnosticsDropped
+	e.CallID, e.State = callID, state
+	var lastSequence uint64
+	if len(prev.Diagnostics) > 0 {
+		lastSequence = prev.Diagnostics[len(prev.Diagnostics)-1].Sequence
+	}
+	for _, detail := range stats.Diagnostics {
+		if detail.Sequence > lastSequence {
+			e.Diagnostics = append(e.Diagnostics, detail)
+		}
+	}
+	if e.Packets == 0 && e.Bytes == 0 && e.MediaErrors == 0 && e.LocalCancellations == 0 && e.RemoteClosures == 0 && len(e.Diagnostics) == 0 {
+		return
+	}
+	d.eventMu.RLock()
+	sink := d.eventSink
+	d.eventMu.RUnlock()
+	if sink != nil {
+		sink.OnDeviceEvent(e)
+	}
+}
 func (d *Device) State() State       { d.mu.Lock(); defer d.mu.Unlock(); return d.state }
 func (d *Device) transition(s State) { d.mu.Lock(); d.state = s; d.mu.Unlock() }
 
@@ -114,10 +175,18 @@ func (d *Device) Run(ctx context.Context) error {
 	if d.Hooks.Transport == nil {
 		return fmt.Errorf("SIP transport is nil")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	// Keep receiving final BYE responses after the workload context expires.
+	runCtx, cancel := context.WithCancel(context.Background())
 	d.runCancel = cancel
 	d.wg.Add(1)
 	go d.loop(runCtx)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = d.Close()
+		case <-d.closeDone:
+		}
+	}()
 	return nil
 }
 
@@ -127,6 +196,8 @@ func (d *Device) loop(ctx context.Context) {
 	defer ticker.Stop()
 	keepaliveTicker := time.NewTicker(d.Hooks.KeepaliveInterval)
 	defer keepaliveTicker.Stop()
+	statsTicker := time.NewTicker(time.Second)
+	defer statsTicker.Stop()
 	d.sendRegister(ctx)
 	d.transition(StateOnline)
 	messages := make(chan sip.Message, 1)
@@ -151,6 +222,8 @@ func (d *Device) loop(ctx context.Context) {
 			d.sendRegister(ctx)
 		case <-keepaliveTicker.C:
 			d.sendKeepalive(ctx)
+		case <-statsTicker.C:
+			d.emitMediaStats()
 		case msg := <-messages:
 			_ = d.HandleMessage(ctx, msg)
 		}
@@ -158,6 +231,7 @@ func (d *Device) loop(ctx context.Context) {
 }
 
 func (d *Device) sendRegister(ctx context.Context) {
+	d.emit("register_attempt", "", "")
 	target := d.Hooks.Target
 	if target == "" {
 		target = "sip:server@127.0.0.1"
@@ -205,6 +279,32 @@ func (d *Device) sendKeepalive(ctx context.Context) {
 }
 
 func (d *Device) HandleMessage(ctx context.Context, msg sip.Message) error {
+	if strings.HasPrefix(msg.StartLine, "SIP/2.0 ") && strings.HasSuffix(strings.ToUpper(msg.Headers["cseq"]), " BYE") {
+		n, err := sip.ParseCSeq(msg.Headers["cseq"], "BYE")
+		parts := strings.Fields(msg.StartLine)
+		if err != nil || len(parts) < 2 {
+			return nil
+		}
+		status, err := strconv.Atoi(parts[1])
+		if err != nil || status < 200 {
+			return nil
+		}
+		d.mu.Lock()
+		reply := d.byeReply
+		match := msg.Headers["call-id"] == d.dialog.CallID && n == d.dialog.CSeq
+		d.mu.Unlock()
+		if reply != nil && match {
+			var outcome error
+			if status >= 300 {
+				outcome = fmt.Errorf("BYE rejected with status %d", status)
+			}
+			select {
+			case reply <- outcome:
+			default:
+			}
+		}
+		return nil
+	}
 	if strings.HasPrefix(msg.StartLine, "SIP/2.0 401") && strings.Contains(strings.ToUpper(msg.Headers["cseq"]), "REGISTER") {
 		return d.handleRegisterChallenge(ctx, msg)
 	}
@@ -216,6 +316,13 @@ func (d *Device) HandleMessage(ctx context.Context, msg sip.Message) error {
 		return d.handleInvite(ctx, msg)
 	}
 	if strings.HasPrefix(msg.StartLine, "ACK ") {
+		n, err := sip.ParseCSeq(msg.Headers["cseq"], "ACK")
+		d.mu.Lock()
+		matches := err == nil && msg.Headers["call-id"] == d.dialog.CallID && n == d.dialog.InviteCSeq
+		d.mu.Unlock()
+		if !matches {
+			return nil
+		}
 		return d.startMedia(ctx)
 	}
 	if strings.HasPrefix(msg.StartLine, "BYE ") {
@@ -249,6 +356,9 @@ func (d *Device) handleQuery(ctx context.Context, msg sip.Message) error {
 	if err != nil {
 		d.emit("query_error", "", err.Error())
 		return err
+	}
+	if strings.EqualFold(q.CmdType, "catalog") {
+		d.emit("catalog_query", d.Identity.ChannelID, "")
 	}
 	if err := d.sendResponse(ctx, msg, "200 OK", ""); err != nil {
 		d.emit("query_error", "", err.Error())
@@ -287,18 +397,32 @@ func (d *Device) handleQuery(ctx context.Context, msg sip.Message) error {
 	return nil
 }
 
+// Called only after a successful WVP response contains the actual stream identity.
+func (d *Device) ConfirmMedia() { d.emit("media_confirmed", d.Identity.ChannelID, "") }
+
 func (d *Device) sendResponse(ctx context.Context, msg sip.Message, status, body string) error {
-	response := []byte(fmt.Sprintf("SIP/2.0 %s\r\nVia: %s\r\nFrom: %s\r\nTo: %s;tag=loadtest\r\nCall-ID: %s\r\nCSeq: %s\r\nContent-Length: %d\r\n\r\n%s", status, msg.Headers["via"], msg.Headers["from"], msg.Headers["to"], msg.Headers["call-id"], msg.Headers["cseq"], len(body), body))
+	to := msg.Headers["to"]
+	if sip.HeaderTag(to) == "" {
+		to += ";tag=loadtest"
+	}
+	response := []byte(fmt.Sprintf("SIP/2.0 %s\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\nContent-Length: %d\r\n\r\n%s", status, msg.Headers["via"], msg.Headers["from"], to, msg.Headers["call-id"], msg.Headers["cseq"], len(body), body))
 	return d.Hooks.Transport.Send(ctx, d.Hooks.Peer, response)
 }
 
 func (d *Device) handleRemoteBye(ctx context.Context, msg sip.Message) error {
 	d.mu.Lock()
+	if msg.Headers["call-id"] != d.dialog.CallID {
+		d.mu.Unlock()
+		return d.sendResponse(ctx, msg, "481 Call/Transaction Does Not Exist", "")
+	}
 	active := d.active
 	d.active = false
+	d.mediaRunning = false
+	sender := d.Hooks.Sender
 	d.mu.Unlock()
-	if active && d.Hooks.Sender != nil {
-		_ = d.Hooks.Sender.Stop()
+	if active && sender != nil {
+		_ = sender.Stop()
+		d.emitMediaStats()
 	}
 	d.transition(StateOnline)
 	d.emit("device_bye", d.Identity.ChannelID, "")
@@ -310,20 +434,57 @@ func (d *Device) handleRemoteBye(ctx context.Context, msg sip.Message) error {
 }
 
 func (d *Device) handleInvite(ctx context.Context, msg sip.Message) error {
+	n, err := sip.ParseCSeq(msg.Headers["cseq"], "INVITE")
+	if err != nil {
+		return d.sendResponse(ctx, msg, "400 Bad Request", "")
+	}
 	d.mu.Lock()
-	if d.active {
+	if d.stopping || d.shuttingDown {
 		d.mu.Unlock()
-		return fmt.Errorf("playback already active")
+		return d.sendResponse(ctx, msg, "486 Busy Here", "")
+	}
+	if d.active {
+		response := append([]byte(nil), d.inviteResponse...)
+		repeat := msg.Headers["call-id"] == d.dialog.CallID && n == d.dialog.InviteCSeq
+		d.mu.Unlock()
+		if repeat && len(response) > 0 {
+			return d.Hooks.Transport.Send(ctx, d.Hooks.Peer, response)
+		}
+		return d.sendResponse(ctx, msg, "486 Busy Here", "")
 	}
 	callID := msg.Headers["call-id"]
 	if callID == "" {
 		callID = d.Identity.CallID
 	}
-	d.dialog = sip.Dialog{Target: msg.Headers["from"], Local: msg.Headers["to"], CallID: callID, CSeq: 1}
+	target := sip.HeaderURI(msg.Headers["contact"])
+	if target == "" {
+		target = sip.HeaderURI(msg.Headers["from"])
+	}
+	localTag := sip.HeaderTag(msg.Headers["to"])
+	if localTag == "" {
+		localTag = "loadtest-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	d.dialog = sip.Dialog{Target: target, Local: sip.HeaderURI(msg.Headers["to"]), Remote: sip.HeaderURI(msg.Headers["from"]), LocalTag: localTag, RemoteTag: sip.HeaderTag(msg.Headers["from"]), CallID: callID, CSeq: 1, InviteCSeq: n, Via: d.Hooks.Local}
+	d.dialog.NextHop = sip.HeaderURI(msg.Headers["contact"])
+	if route := msg.Headers["record-route"]; route != "" {
+		d.dialog.Routes = strings.Split(route, ",")
+	}
 	d.active = true
 	d.byeSent = false
+	d.mediaRunning = false
 	d.mu.Unlock()
+	success := false
 	var sender MediaSender
+	defer func() {
+		if !success {
+			if sender != nil {
+				_ = sender.Stop()
+			}
+			d.mu.Lock()
+			d.active = false
+			d.mu.Unlock()
+		}
+	}()
 	answer := ""
 	if d.Hooks.SenderFactory != nil {
 		offer, err := sip.ParseSDP(msg.Body)
@@ -342,15 +503,29 @@ func (d *Device) handleInvite(ctx context.Context, msg sip.Message) error {
 			sender = nil
 		}
 		d.mu.Lock()
+		if d.stopping || d.shuttingDown {
+			d.mu.Unlock()
+			return fmt.Errorf("device is stopping")
+		}
 		d.Hooks.Sender = sender
+		d.lastStats = rtp.SenderStats{}
 		d.mu.Unlock()
 	}
-	response := []byte(fmt.Sprintf("SIP/2.0 200 OK\r\nVia: %s\r\nFrom: %s\r\nTo: %s;tag=loadtest\r\nCall-ID: %s\r\nCSeq: 1 INVITE\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s", msg.Headers["via"], msg.Headers["from"], msg.Headers["to"], callID, len(answer), answer))
+	to := msg.Headers["to"]
+	if sip.HeaderTag(to) == "" {
+		to += ";tag=" + localTag
+	}
+	contact := "sip:" + d.Identity.DeviceID + "@" + d.Hooks.Local
+	response := []byte(fmt.Sprintf("SIP/2.0 200 OK\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\nContact: <%s>\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s", msg.Headers["via"], msg.Headers["from"], to, callID, msg.Headers["cseq"], contact, len(answer), answer))
 	if err := d.Hooks.Transport.Send(ctx, d.Hooks.Peer, response); err != nil {
 		d.transition(StateFailed)
 		d.emit("invite_error", d.Identity.ChannelID, err.Error())
 		return err
 	}
+	d.mu.Lock()
+	d.inviteResponse = response
+	d.mu.Unlock()
+	success = true
 	d.transition(StatePlaying)
 	d.emit("invite_success", d.Identity.ChannelID, "")
 	return nil
@@ -360,16 +535,24 @@ func (d *Device) StartPlay(ctx context.Context) error { return d.startMedia(ctx)
 func (d *Device) startMedia(ctx context.Context) error {
 	d.mu.Lock()
 	active := d.active
+	if d.mediaRunning {
+		d.mu.Unlock()
+		return nil
+	}
+	sender := d.Hooks.Sender
+	if active && sender != nil {
+		d.mediaRunning = true
+	}
 	d.mu.Unlock()
 	if !active {
 		err := fmt.Errorf("no active invite")
 		d.emit("media_start_error", d.Identity.ChannelID, err.Error())
 		return err
 	}
-	if d.Hooks.Sender == nil {
+	if sender == nil {
 		return nil
 	}
-	if err := d.Hooks.Sender.Start(ctx); err != nil {
+	if err := sender.Start(ctx); err != nil {
 		d.transition(StateFailed)
 		d.emit("media_start_error", d.Identity.ChannelID, err.Error())
 		return err
@@ -377,12 +560,15 @@ func (d *Device) startMedia(ctx context.Context) error {
 	d.emit("media_started", d.Identity.ChannelID, "")
 	if d.Hooks.DeviceByeAfter > 0 {
 		byeCtx := ctx
+		d.mu.Lock()
+		callID := d.dialog.CallID
+		d.mu.Unlock()
 		go func() {
 			timer := time.NewTimer(d.Hooks.DeviceByeAfter)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				_ = d.StopPlay(byeCtx)
+				_ = d.stopPlay(byeCtx, callID)
 			case <-byeCtx.Done():
 			}
 		}()
@@ -391,24 +577,82 @@ func (d *Device) startMedia(ctx context.Context) error {
 }
 
 func (d *Device) StopPlay(ctx context.Context) error {
+	return d.stopPlay(ctx, "")
+}
+
+func (d *Device) stopPlay(ctx context.Context, expectedCallID string) error {
+	d.stopMu.Lock()
+	defer d.stopMu.Unlock()
 	d.mu.Lock()
-	if !d.active {
+	if !d.active || expectedCallID != "" && d.dialog.CallID != expectedCallID {
 		d.mu.Unlock()
 		return nil
 	}
 	d.active = false
+	d.stopping = true
+	d.mediaRunning = false
 	dialog := d.dialog
 	already := d.byeSent
 	d.byeSent = true
+	sender := d.Hooks.Sender
+	reply := make(chan error, 1)
+	d.byeReply = reply
 	d.mu.Unlock()
-	if d.Hooks.Sender != nil {
-		_ = d.Hooks.Sender.Stop()
+	defer func() { d.mu.Lock(); d.byeReply = nil; d.stopping = false; d.mu.Unlock(); d.transition(StateOnline) }()
+	if sender != nil {
+		_ = sender.Stop()
+		d.emitMediaStats()
 	}
 	if !already && d.Hooks.Transport != nil {
-		b, _ := sip.BuildBye(dialog)
-		if len(b) > 0 {
-			_ = d.Hooks.Transport.Send(ctx, d.Hooks.Peer, b)
-			d.emit("device_bye_sent", d.Identity.ChannelID, "")
+		b, err := sip.BuildBye(dialog)
+		if err != nil {
+			d.emit("device_bye_error", d.Identity.ChannelID, err.Error())
+			return err
+		}
+		byeCtx, cancel := context.WithTimeout(ctx, d.Hooks.ByeTimeout)
+		defer cancel()
+		peer := d.Hooks.Peer
+		nextHop := dialog.NextHop
+		if len(dialog.Routes) > 0 {
+			nextHop = sip.HeaderURI(dialog.Routes[0])
+		}
+		if nextHop != "" {
+			addr, err := sip.ResolveUDPURI(nextHop)
+			if err != nil {
+				d.emit("device_bye_error", d.Identity.ChannelID, "invalid SIP dialog next hop")
+				return fmt.Errorf("invalid SIP dialog next hop")
+			}
+			peer = addr
+		}
+		if err := d.Hooks.Transport.Send(byeCtx, peer, b); err != nil {
+			d.emit("device_bye_error", d.Identity.ChannelID, err.Error())
+			return err
+		}
+		d.emit("device_bye_sent", d.Identity.ChannelID, "")
+		d.transition(StateStopping)
+		timer := time.NewTimer(500 * time.Millisecond)
+		defer timer.Stop()
+		interval := 500 * time.Millisecond
+		for {
+			select {
+			case err := <-reply:
+				if err != nil {
+					d.emit("device_bye_error", d.Identity.ChannelID, err.Error())
+				} else {
+					d.emit("device_bye_success", d.Identity.ChannelID, "")
+				}
+				return err
+			case <-byeCtx.Done():
+				d.emit("device_bye_timeout", d.Identity.ChannelID, byeCtx.Err().Error())
+				return byeCtx.Err()
+			case <-timer.C:
+				if err := d.Hooks.Transport.Send(byeCtx, peer, b); err != nil {
+					d.emit("device_bye_error", d.Identity.ChannelID, err.Error())
+					return err
+				}
+				interval *= 2
+				timer.Reset(interval)
+			}
 		}
 	}
 	d.transition(StateStopping)
@@ -417,14 +661,20 @@ func (d *Device) StopPlay(ctx context.Context) error {
 }
 
 func (d *Device) Close() error {
-	if d.runCancel != nil {
-		d.runCancel()
-	}
-	d.wg.Wait()
-	_ = d.StopPlay(context.Background())
-	d.transition(StateClosed)
-	if d.Hooks.Transport != nil {
-		return d.Hooks.Transport.Close()
-	}
-	return nil
+	d.closeOnce.Do(func() {
+		defer close(d.closeDone)
+		d.mu.Lock()
+		d.shuttingDown = true
+		d.mu.Unlock()
+		_ = d.StopPlay(context.Background())
+		if d.runCancel != nil {
+			d.runCancel()
+		}
+		if d.Hooks.Transport != nil {
+			d.closeErr = d.Hooks.Transport.Close()
+		}
+		d.wg.Wait()
+		d.transition(StateClosed)
+	})
+	return d.closeErr
 }

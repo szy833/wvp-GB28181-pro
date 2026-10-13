@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/shizy/gb28181-load-test/internal/monitoring"
+	"github.com/shizy/gb28181-load-test/internal/rtp"
 )
 
 type Report struct {
@@ -33,12 +34,20 @@ type Report struct {
 }
 
 type ZLMReport struct {
-	Available         bool   `json:"available"`
-	ResidualAvailable bool   `json:"residualAvailable"`
-	PeakStreams       int    `json:"peakStreams"`
-	ResidualStreams   int    `json:"residualStreams"`
-	APIErrorCount     int    `json:"apiErrors"`
-	MediaServerID     string `json:"mediaServerId,omitempty"`
+	ResidualListeners  int      `json:"residualListeners"`
+	ListenersAvailable bool     `json:"listenersAvailable"`
+	ResidualSessions   int      `json:"residualSessions"`
+	SessionsAvailable  bool     `json:"sessionsAvailable"`
+	ScopeFiltered      bool     `json:"scopeFiltered"`
+	CleanupSeconds     float64  `json:"cleanupSeconds"`
+	CleanupTimedOut    bool     `json:"cleanupTimedOut"`
+	CleanupErrors      []string `json:"cleanupErrors,omitempty"`
+	Available          bool     `json:"available"`
+	ResidualAvailable  bool     `json:"residualAvailable"`
+	PeakStreams        int      `json:"peakStreams"`
+	ResidualStreams    int      `json:"residualStreams"`
+	APIErrorCount      int      `json:"apiErrors"`
+	MediaServerID      string   `json:"mediaServerId,omitempty"`
 }
 
 type ConfigSummary struct {
@@ -64,20 +73,41 @@ type Stage struct {
 	LatencyP95      float64   `json:"latencyP95,omitempty"`
 	LatencyP99      float64   `json:"latencyP99,omitempty"`
 }
+type SendDiagnostic struct {
+	rtp.SendDiagnostic
+	CallID      string `json:"callId"`
+	ChannelID   string `json:"channelId"`
+	DeviceState string `json:"deviceState"`
+}
+
 type DeviceResult struct {
-	DeviceID           string   `json:"deviceId"`
-	ChannelID          string   `json:"channelId"`
-	Created            bool     `json:"created"`
-	Started            bool     `json:"started"`
-	RegisterRequests   int      `json:"registerRequests"`
-	RegisterChallenges int      `json:"registerChallenges"`
-	RegisterSuccess    int      `json:"registerSuccess"`
-	CatalogSuccess     int      `json:"catalogSuccess"`
-	InviteSuccess      int      `json:"inviteSuccess"`
-	MediaStarted       int      `json:"mediaStarted"`
-	DeviceBye          int      `json:"deviceBye"`
-	DeviceByeSent      int      `json:"deviceByeSent"`
-	Errors             []string `json:"errors,omitempty"`
+	RTPPackets            uint64           `json:"rtpPackets"`
+	RTPBytes              uint64           `json:"rtpBytes"`
+	RTPErrors             uint64           `json:"rtpErrors"`
+	RTPLocalCancellations uint64           `json:"rtpLocalCancellations"`
+	RTPRemoteClosures     uint64           `json:"rtpRemoteClosures"`
+	RTPDiagnosticsDropped uint64           `json:"rtpDiagnosticsDropped"`
+	RTPDiagnostics        []SendDiagnostic `json:"rtpDiagnostics,omitempty"`
+	DeviceID              string           `json:"deviceId"`
+	ChannelID             string           `json:"channelId"`
+	Created               bool             `json:"created"`
+	Started               bool             `json:"started"`
+	RegisterRequests      int              `json:"registerRequests"`
+	RegisterAttempts      int              `json:"registerAttempts"`
+	RegisterChallenges    int              `json:"registerChallenges"`
+	RegisterSuccess       int              `json:"registerSuccess"`
+	CatalogSuccess        int              `json:"catalogSuccess"`
+	CatalogQueries        int              `json:"catalogQueries"`
+	DeviceInfoResponses   int              `json:"deviceInfoResponses"`
+	DeviceStatusResponses int              `json:"deviceStatusResponses"`
+	InviteSuccess         int              `json:"inviteSuccess"`
+	MediaStarted          int              `json:"mediaStarted"`
+	DeviceBye             int              `json:"deviceBye"`
+	DeviceByeSent         int              `json:"deviceByeSent"`
+	DeviceByeSuccess      int              `json:"deviceByeSuccess"`
+	DeviceByeErrors       int              `json:"deviceByeErrors"`
+	DeviceByeTimeouts     int              `json:"deviceByeTimeouts"`
+	Errors                []string         `json:"errors,omitempty"`
 }
 type PlayResult struct {
 	ID                              string    `json:"id"`
@@ -91,6 +121,8 @@ type PlayResult struct {
 	InviteAt                        time.Time `json:"inviteAt,omitempty"`
 	InviteLatencySeconds            float64   `json:"inviteLatencySeconds,omitempty"`
 	MediaAt                         time.Time `json:"mediaAt,omitempty"`
+	SenderAt                        time.Time `json:"senderAt,omitempty"`
+	SenderStartLatencySeconds       float64   `json:"senderStartLatencySeconds,omitempty"`
 	MediaConfirmationLatencySeconds float64   `json:"mediaConfirmationLatencySeconds,omitempty"`
 	StopAttempted                   bool      `json:"stopAttempted"`
 	StopSuccess                     bool      `json:"stopSuccess"`
@@ -158,16 +190,20 @@ func WriteDetailCSV(path string, report Report) error {
 	}
 	defer f.Close()
 	w := csv.NewWriter(f)
-	if err := w.Write([]string{"type", "id", "deviceId", "channelId", "created", "started", "registerRequests", "registerChallenges", "registerSuccess", "catalogSuccess", "inviteSuccess", "mediaStarted", "deviceBye", "deviceByeSent", "startSuccess", "startError", "startLatencySeconds", "inviteAt", "inviteLatencySeconds", "mediaAt", "mediaConfirmationLatencySeconds", "stopAttempted", "stopStartedAt", "stopSuccess", "stopError", "stopLatencySeconds", "errors"}); err != nil {
+	if err := w.Write([]string{"type", "id", "deviceId", "channelId", "created", "started", "registerRequests", "registerChallenges", "registerSuccess", "catalogSuccess", "inviteSuccess", "mediaStarted", "deviceBye", "deviceByeSent", "startSuccess", "startError", "startLatencySeconds", "inviteAt", "inviteLatencySeconds", "mediaAt", "mediaConfirmationLatencySeconds", "stopAttempted", "stopStartedAt", "stopSuccess", "stopError", "stopLatencySeconds", "errors", "registerAttempts", "catalogQueries", "deviceInfoResponses", "deviceStatusResponses", "deviceByeSuccess", "deviceByeErrors", "deviceByeTimeouts", "rtpPackets", "rtpBytes", "rtpErrors", "senderAt", "senderStartLatencySeconds", "rtpLocalCancellations", "rtpRemoteClosures", "rtpDiagnosticsDropped", "rtpDiagnostics"}); err != nil {
 		return err
 	}
 	for _, d := range report.Devices {
-		if err := w.Write([]string{"device", "", d.DeviceID, d.ChannelID, fmt.Sprint(d.Created), fmt.Sprint(d.Started), fmt.Sprint(d.RegisterRequests), fmt.Sprint(d.RegisterChallenges), fmt.Sprint(d.RegisterSuccess), fmt.Sprint(d.CatalogSuccess), fmt.Sprint(d.InviteSuccess), fmt.Sprint(d.MediaStarted), fmt.Sprint(d.DeviceBye), fmt.Sprint(d.DeviceByeSent), "", "", "", "", "", "", "", "", "", "", "", "", strings.Join(d.Errors, " | ")}); err != nil {
+		diagnostics, err := json.Marshal(d.RTPDiagnostics)
+		if err != nil {
+			return err
+		}
+		if err := w.Write([]string{"device", "", d.DeviceID, d.ChannelID, fmt.Sprint(d.Created), fmt.Sprint(d.Started), fmt.Sprint(d.RegisterRequests), fmt.Sprint(d.RegisterChallenges), fmt.Sprint(d.RegisterSuccess), fmt.Sprint(d.CatalogSuccess), fmt.Sprint(d.InviteSuccess), fmt.Sprint(d.MediaStarted), fmt.Sprint(d.DeviceBye), fmt.Sprint(d.DeviceByeSent), "", "", "", "", "", "", "", "", "", "", "", "", strings.Join(d.Errors, " | "), fmt.Sprint(d.RegisterAttempts), fmt.Sprint(d.CatalogQueries), fmt.Sprint(d.DeviceInfoResponses), fmt.Sprint(d.DeviceStatusResponses), fmt.Sprint(d.DeviceByeSuccess), fmt.Sprint(d.DeviceByeErrors), fmt.Sprint(d.DeviceByeTimeouts), fmt.Sprint(d.RTPPackets), fmt.Sprint(d.RTPBytes), fmt.Sprint(d.RTPErrors), "", "", fmt.Sprint(d.RTPLocalCancellations), fmt.Sprint(d.RTPRemoteClosures), fmt.Sprint(d.RTPDiagnosticsDropped), string(diagnostics)}); err != nil {
 			return err
 		}
 	}
 	for _, p := range report.Plays {
-		if err := w.Write([]string{"play", p.ID, p.DeviceID, p.ChannelID, "", "", "", "", "", "", "", "", "", "", fmt.Sprint(p.StartSuccess), p.StartError, fmt.Sprintf("%.3f", p.StartLatencySeconds), formatOptionalTime(p.InviteAt), fmt.Sprintf("%.3f", p.InviteLatencySeconds), formatOptionalTime(p.MediaAt), fmt.Sprintf("%.3f", p.MediaConfirmationLatencySeconds), fmt.Sprint(p.StopAttempted), formatOptionalTime(p.StopStartedAt), fmt.Sprint(p.StopSuccess), p.StopError, fmt.Sprintf("%.3f", p.StopLatencySeconds), ""}); err != nil {
+		if err := w.Write([]string{"play", p.ID, p.DeviceID, p.ChannelID, "", "", "", "", "", "", "", "", "", "", fmt.Sprint(p.StartSuccess), p.StartError, fmt.Sprintf("%.3f", p.StartLatencySeconds), formatOptionalTime(p.InviteAt), fmt.Sprintf("%.3f", p.InviteLatencySeconds), formatOptionalTime(p.MediaAt), fmt.Sprintf("%.3f", p.MediaConfirmationLatencySeconds), fmt.Sprint(p.StopAttempted), formatOptionalTime(p.StopStartedAt), fmt.Sprint(p.StopSuccess), p.StopError, fmt.Sprintf("%.3f", p.StopLatencySeconds), "", "", "", "", "", "", "", "", "", "", "", formatOptionalTime(p.SenderAt), fmt.Sprintf("%.3f", p.SenderStartLatencySeconds), "", "", "", ""}); err != nil {
 			return err
 		}
 	}
@@ -193,6 +229,8 @@ func DetailCSVPath(summaryPath string) string {
 func PrintSummary(out io.Writer, report Report, detailPath string) {
 	normalize(&report)
 	fmt.Fprintf(out, "run=%s devices=%d duration=%.1fs\n", report.RunID, report.DeviceCount, report.FinishedAt.Sub(report.StartedAt).Seconds())
+	b := report.Business
+	fmt.Fprintf(out, "business register=%s catalog=%s play=%s media=%s stop=%s\n", b.FormatRate("register", b.RegisterSuccessRate), b.FormatRate("catalog", b.CatalogSuccessRate), b.FormatRate("play", b.PlaySuccessRate), b.FormatRate("media", b.MediaSuccessRate), b.FormatRate("stop", b.StopSuccessRate))
 	for _, s := range report.Stages {
 		fmt.Fprintf(out, "stage=%s devices=%d success=%d failed=%d successRate=%.1f%% duration=%.3fs\n", s.Name, s.Devices, s.Success, s.Failed, s.SuccessRate*100, s.DurationSeconds)
 	}
@@ -207,6 +245,23 @@ func PrintSummary(out io.Writer, report Report, detailPath string) {
 	}
 	if len(report.Devices) > 0 {
 		fmt.Fprintf(out, "events registerSuccess=%d catalogResponses=%d inviteSuccess=%d mediaStarted=%d deviceBye=%d deviceByeSent=%d\n", registerSuccess, catalogSuccess, inviteSuccess, mediaStarted, deviceBye, deviceByeSent)
+	}
+	byeOK, byeErrors, byeTimeouts := 0, 0, 0
+	var packets, bytes, rtpErrors, localCancellations, remoteClosures uint64
+	for _, d := range report.Devices {
+		byeOK += d.DeviceByeSuccess
+		byeErrors += d.DeviceByeErrors
+		byeTimeouts += d.DeviceByeTimeouts
+		packets += d.RTPPackets
+		bytes += d.RTPBytes
+		rtpErrors += d.RTPErrors
+		localCancellations += d.RTPLocalCancellations
+		remoteClosures += d.RTPRemoteClosures
+	}
+	fmt.Fprintf(out, "bye success=%d errors=%d timeouts=%d; rtp packets=%d bytes=%d errors=%d\n", byeOK, byeErrors, byeTimeouts, packets, bytes, rtpErrors)
+	fmt.Fprintf(out, "rtp localCancellations=%d remoteClosures=%d (remote closures remain errors)\n", localCancellations, remoteClosures)
+	if report.Summary.Name != "" {
+		fmt.Fprintf(out, "verdict=%s monitoringComplete=%t cleanupTimedOut=%t residualStreams=%d(available=%t) residualListeners=%d(available=%t) residualSessions=%d(available=%t)\n", report.Summary.Name, report.Summary.MonitoringComplete, report.ZLM.CleanupTimedOut, report.ZLM.ResidualStreams, report.ZLM.ResidualAvailable, report.ZLM.ResidualListeners, report.ZLM.ListenersAvailable, report.ZLM.ResidualSessions, report.ZLM.SessionsAvailable)
 	}
 	plays := len(report.Plays)
 	successful := 0

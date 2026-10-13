@@ -57,21 +57,39 @@ func (s *PlayScheduler) Run(ctx context.Context, devices []*device.Device) {
 	defer ticker.Stop()
 	var wg sync.WaitGroup
 	index := 0
+	busy := make(map[string]bool)
+	completed := make(chan string, len(devices))
 	for {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
 			return
+		case id := <-completed:
+			delete(busy, id)
 		case <-ticker.C:
-			d := devices[index%len(devices)]
-			index++
+			var d *device.Device
+			for i := 0; i < len(devices); i++ {
+				candidate := devices[index%len(devices)]
+				index++
+				if !busy[candidate.Identity.DeviceID] {
+					d = candidate
+					break
+				}
+			}
+			if d == nil {
+				continue
+			}
 			select {
 			case sem <- struct{}{}:
 			default:
 				continue
 			}
 			wg.Add(1)
-			go s.runOne(ctx, &wg, sem, d)
+			busy[d.Identity.DeviceID] = true
+			go func(target *device.Device) {
+				defer func() { completed <- target.Identity.DeviceID }()
+				s.runOne(ctx, &wg, sem, target)
+			}(d)
 		}
 	}
 }

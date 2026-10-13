@@ -74,24 +74,57 @@ func (c *resultCollector) OnDeviceEvent(event device.DeviceEvent) {
 		result.ChannelID = event.ChannelID
 	}
 	switch event.Name {
+	case "register_attempt":
+		result.RegisterAttempts++
+	case "media_stats":
+		result.RTPPackets += event.Packets
+		result.RTPBytes += event.Bytes
+		result.RTPErrors += event.MediaErrors
+		result.RTPLocalCancellations += event.LocalCancellations
+		result.RTPRemoteClosures += event.RemoteClosures
+		result.RTPDiagnosticsDropped += event.DiagnosticsDropped
+		for _, detail := range event.Diagnostics {
+			result.RTPDiagnostics = append(result.RTPDiagnostics, metrics.SendDiagnostic{SendDiagnostic: detail,
+				CallID: event.CallID, ChannelID: event.ChannelID, DeviceState: event.State})
+		}
+		if len(result.RTPDiagnostics) > 32 {
+			result.RTPDiagnosticsDropped += uint64(len(result.RTPDiagnostics) - 32)
+			result.RTPDiagnostics = result.RTPDiagnostics[len(result.RTPDiagnostics)-32:]
+		}
 	case "register_request":
 		result.RegisterRequests++
 	case "register_challenge":
 		result.RegisterChallenges++
 	case "register_success":
 		result.RegisterSuccess++
-	case "catalog_response", "deviceinfo_response", "devicestatus_response":
+	case "catalog_query":
+		result.CatalogQueries++
+	case "catalog_response":
 		result.CatalogSuccess++
+	case "deviceinfo_response":
+		result.DeviceInfoResponses++
+	case "devicestatus_response":
+		result.DeviceStatusResponses++
 	case "invite_success":
 		result.InviteSuccess++
 		c.recordPlayEventLocked(event.DeviceID, "invite_success", event.At)
 	case "media_started":
 		result.MediaStarted++
 		c.recordPlayEventLocked(event.DeviceID, "media_started", event.At)
+	case "media_confirmed":
+		c.recordPlayEventLocked(event.DeviceID, "media_confirmed", event.At)
 	case "device_bye":
 		result.DeviceBye++
 	case "device_bye_sent":
 		result.DeviceByeSent++
+	case "device_bye_success":
+		result.DeviceByeSuccess++
+	case "device_bye_timeout":
+		result.DeviceByeTimeouts++
+		result.Errors = append(result.Errors, "device_bye_timeout: "+event.Error)
+	case "device_bye_error":
+		result.DeviceByeErrors++
+		result.Errors = append(result.Errors, "device_bye_error: "+event.Error)
 	case "register_error", "query_error", "invite_error", "media_start_error":
 		if event.Error != "" {
 			result.Errors = append(result.Errors, event.Name+": "+event.Error)
@@ -106,6 +139,14 @@ func (c *resultCollector) OnDeviceEvent(event device.DeviceEvent) {
 	if c.metrics == nil {
 		return
 	}
+	if event.Name == "media_stats" {
+		c.metrics.Counter("rtp_packets_sent_total", event.Packets)
+		c.metrics.Counter("rtp_bytes_sent_total", event.Bytes)
+		c.metrics.Counter("rtp_send_errors_total", event.MediaErrors)
+		c.metrics.Counter("rtp_local_cancellations_total", event.LocalCancellations)
+		c.metrics.Counter("rtp_remote_closures_total", event.RemoteClosures)
+		c.metrics.Counter("rtp_diagnostics_dropped_total", event.DiagnosticsDropped)
+	}
 	counters := map[string]string{
 		"register_request":      "sip_register_requests_total",
 		"register_challenge":    "sip_register_challenges_total",
@@ -117,6 +158,9 @@ func (c *resultCollector) OnDeviceEvent(event device.DeviceEvent) {
 		"media_started":         "sip_media_started_total",
 		"device_bye":            "sip_device_bye_total",
 		"device_bye_sent":       "sip_device_bye_sent_total",
+		"device_bye_success":    "sip_device_bye_success_total",
+		"device_bye_timeout":    "sip_device_bye_timeouts_total",
+		"device_bye_error":      "sip_device_bye_errors_total",
 	}
 	if counter := counters[event.Name]; counter != "" {
 		c.metrics.Counter(counter, 1)
@@ -143,10 +187,8 @@ func (c *resultCollector) OnPlayEvent(deviceID, event string, at time.Time) {
 func (c *resultCollector) RecordPlay(result metrics.PlayResult) {
 	c.mu.Lock()
 	c.plays = append(c.plays, result)
-	if result.StartSuccess {
-		c.pendingPlays[result.DeviceID] = append(c.pendingPlays[result.DeviceID], len(c.plays)-1)
-		c.applyPlayEventsLocked(result.DeviceID)
-	}
+	c.pendingPlays[result.DeviceID] = append(c.pendingPlays[result.DeviceID], len(c.plays)-1)
+	c.applyPlayEventsLocked(result.DeviceID)
 	c.mu.Unlock()
 }
 
@@ -157,7 +199,13 @@ func (c *resultCollector) RecordPlay(result metrics.PlayResult) {
 func (c *resultCollector) applyPlayEventsLocked(deviceID string) {
 	events := c.playEvents[deviceID]
 	indexes := c.pendingPlays[deviceID]
-	for _, phase := range []string{"invite_success", "media_started"} {
+	if events == nil {
+		if len(indexes) > 0 && !c.plays[indexes[len(indexes)-1]].FinishedAt.IsZero() {
+			delete(c.pendingPlays, deviceID)
+		}
+		return
+	}
+	for _, phase := range []string{"invite_success", "media_started", "media_confirmed"} {
 		queue := events[phase]
 		for len(queue) > 0 {
 			match := -1
@@ -166,12 +214,19 @@ func (c *resultCollector) applyPlayEventsLocked(deviceID string) {
 					continue
 				}
 				play := &c.plays[index]
-				if phase == "invite_success" && play.InviteAt.IsZero() || phase == "media_started" && play.MediaAt.IsZero() {
+				if queue[0].Before(play.StartedAt) || (!play.FinishedAt.IsZero() && queue[0].After(play.FinishedAt)) {
+					continue
+				}
+				if phase == "invite_success" && play.InviteAt.IsZero() || phase == "media_started" && play.SenderAt.IsZero() || phase == "media_confirmed" && play.MediaAt.IsZero() {
 					match = index
 					break
 				}
 			}
 			if match < 0 {
+				if len(indexes) > 0 && queue[0].Before(c.plays[indexes[0]].StartedAt) {
+					queue = queue[1:]
+					continue
+				}
 				break
 			}
 			at := queue[0]
@@ -183,6 +238,9 @@ func (c *resultCollector) applyPlayEventsLocked(deviceID string) {
 				if c.metrics != nil {
 					c.metrics.Observe("invite_latency_seconds", play.InviteLatencySeconds)
 				}
+			} else if phase == "media_started" {
+				play.SenderAt = at
+				play.SenderStartLatencySeconds = at.Sub(play.StartedAt).Seconds()
 			} else {
 				play.MediaAt = at
 				play.MediaConfirmationLatencySeconds = at.Sub(play.StartedAt).Seconds()
@@ -196,7 +254,7 @@ func (c *resultCollector) applyPlayEventsLocked(deviceID string) {
 	remaining := indexes[:0]
 	for _, index := range indexes {
 		play := &c.plays[index]
-		if play.InviteAt.IsZero() || play.MediaAt.IsZero() {
+		if play.FinishedAt.IsZero() && (play.InviteAt.IsZero() || play.MediaAt.IsZero() || play.SenderAt.IsZero()) {
 			remaining = append(remaining, index)
 		}
 	}
@@ -205,7 +263,7 @@ func (c *resultCollector) applyPlayEventsLocked(deviceID string) {
 	} else {
 		c.pendingPlays[deviceID] = remaining
 	}
-	if len(events["invite_success"]) == 0 && len(events["media_started"]) == 0 {
+	if len(events["invite_success"]) == 0 && len(events["media_started"]) == 0 && len(events["media_confirmed"]) == 0 {
 		delete(c.playEvents, deviceID)
 	}
 }
@@ -222,6 +280,7 @@ func (c *resultCollector) DeviceResults() []metrics.DeviceResult {
 	for _, id := range ids {
 		value := *c.devices[id]
 		value.Errors = append([]string(nil), value.Errors...)
+		value.RTPDiagnostics = append([]metrics.SendDiagnostic(nil), value.RTPDiagnostics...)
 		results = append(results, value)
 	}
 	return results
@@ -236,6 +295,11 @@ func (c *resultCollector) PlayResults() []metrics.PlayResult {
 }
 
 func (r *Runner) Run(ctx context.Context, cfg config.Config, factory Factory) (metrics.Report, error) {
+	if cfg.Scenario.Duration > 0 {
+		runCtx, cancel := context.WithTimeout(ctx, cfg.Scenario.Duration)
+		defer cancel()
+		ctx = runCtx
+	}
 	started := time.Now()
 	report := metrics.Report{
 		RunID: started.UTC().Format("20060102T150405.000000000Z07:00"), StartedAt: started,
@@ -324,6 +388,9 @@ func (r *Runner) Run(ctx context.Context, cfg config.Config, factory Factory) (m
 		go func() { defer schedulerWG.Done(); scheduler.Run(ctx, devices) }()
 	}
 	schedulerWG.Wait()
+	if cfg.Scenario.Duration > 0 && (scheduler.Controller == nil || playRate <= 0) {
+		<-ctx.Done()
+	}
 	if scheduler.Controller != nil {
 		playStage.FinishedAt = time.Now()
 		plays := collector.PlayResults()
@@ -353,17 +420,28 @@ func (r *Runner) Run(ctx context.Context, cfg config.Config, factory Factory) (m
 }
 
 func businessSummary(report metrics.Report) metrics.BusinessSummary {
-	registerRequests, registerSuccess, catalog, plays, playSuccess, media, stopAttempted, stopSuccess := 0, 0, 0, 0, 0, 0, 0, 0
+	registerRequests, registerSuccess, catalogAttempted, catalog, plays, playSuccess, media, stopAttempted, stopSuccess := 0, 0, 0, 0, 0, 0, 0, 0, 0
 	for _, d := range report.Devices {
-		registerRequests += d.RegisterRequests
-		registerSuccess += d.RegisterSuccess
-		catalog += d.CatalogSuccess
-		media += d.MediaStarted
+		if d.RegisterRequests > 0 || d.RegisterAttempts > 0 {
+			registerRequests++
+		}
+		if d.RegisterSuccess > 0 {
+			registerSuccess++
+		}
+		if d.CatalogQueries > 0 {
+			catalogAttempted++
+		}
+		if d.CatalogSuccess > 0 {
+			catalog++
+		}
 	}
 	for _, p := range report.Plays {
 		plays++
 		if p.StartSuccess {
 			playSuccess++
+		}
+		if !p.MediaAt.IsZero() {
+			media++
 		}
 		if p.StopAttempted {
 			stopAttempted++
@@ -374,9 +452,16 @@ func businessSummary(report metrics.Report) metrics.BusinessSummary {
 	}
 	rate := func(success, total int) float64 {
 		if total == 0 {
-			return 1
+			return 0
 		}
 		return float64(success) / float64(total)
 	}
-	return metrics.BusinessSummary{RegisterSuccessRate: rate(registerSuccess, registerRequests), CatalogSuccessRate: rate(catalog, len(report.Devices)), PlaySuccessRate: rate(playSuccess, plays), MediaSuccessRate: rate(media, playSuccess), StopSuccessRate: rate(stopSuccess, stopAttempted), ControlLatencyP95: report.Metrics["wvp_control_latency_seconds_p95"], ControlLatencyP99: report.Metrics["wvp_control_latency_seconds_p99"]}
+	checks := map[string]metrics.BusinessCheck{
+		"register": {Attempted: registerRequests, Succeeded: registerSuccess, Available: registerRequests > 0, Evidence: "device received REGISTER 200; Digest challenges excluded"},
+		"catalog":  {Attempted: catalogAttempted, Succeeded: catalog, Available: catalogAttempted > 0, Evidence: "device sent Catalog response (not WVP channel persistence confirmation)"},
+		"play":     {Attempted: plays, Succeeded: playSuccess, Available: plays > 0, Evidence: "WVP start API returned success"},
+		"media":    {Attempted: plays, Succeeded: media, Available: plays > 0, Evidence: "WVP start API returned matching media stream identity"},
+		"stop":     {Attempted: stopAttempted, Succeeded: stopSuccess, Available: stopAttempted > 0, Evidence: "WVP stop API returned success (not residual resource confirmation)"},
+	}
+	return metrics.BusinessSummary{Checks: checks, RegisterSuccessRate: rate(registerSuccess, registerRequests), CatalogSuccessRate: rate(catalog, catalogAttempted), PlaySuccessRate: rate(playSuccess, plays), MediaSuccessRate: rate(media, plays), StopSuccessRate: rate(stopSuccess, stopAttempted), ControlLatencyP95: report.Metrics["wvp_control_latency_seconds_p95"], ControlLatencyP99: report.Metrics["wvp_control_latency_seconds_p99"]}
 }

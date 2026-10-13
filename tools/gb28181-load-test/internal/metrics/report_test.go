@@ -117,7 +117,7 @@ func TestWriteDetailCSVIncludesDeviceAndPlayRows(t *testing.T) {
 	if err != nil || len(rows) != 3 {
 		t.Fatalf("unexpected rows: %v", rows)
 	}
-	if len(rows[0]) != 27 || len(rows[1]) != len(rows[0]) || len(rows[2]) != len(rows[0]) {
+	if len(rows[0]) != 43 || len(rows[1]) != len(rows[0]) || len(rows[2]) != len(rows[0]) {
 		t.Fatalf("unexpected detail columns: header=%d device=%d play=%d", len(rows[0]), len(rows[1]), len(rows[2]))
 	}
 }

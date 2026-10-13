@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeTransport struct {
@@ -41,16 +42,18 @@ func TestDeviceHandlesInviteAndStopsOnce(t *testing.T) {
 	tr := &fakeTransport{}
 	snd := &fakeSender{}
 	d := New(id, DeviceHooks{Transport: tr, Sender: snd})
-	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "INVITE sip:x SIP/2.0", Headers: map[string]string{"call-id": "c1", "via": "v", "from": "f", "to": "t"}}); err != nil {
+	if err := d.HandleMessage(context.Background(), inviteMessage()); err != nil {
 		t.Fatal(err)
 	}
 	if d.State() != StatePlaying || len(tr.sent) != 1 || !strings.HasPrefix(string(tr.sent[0]), "SIP/2.0 200") {
 		t.Fatal(d.State())
 	}
-	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "ACK sip:x SIP/2.0", Headers: map[string]string{}}); err != nil {
+	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "ACK sip:x SIP/2.0", Headers: map[string]string{"call-id": "dialog-319", "cseq": "319 ACK"}}); err != nil {
 		t.Fatal(err)
 	}
-	_ = d.StopPlay(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_ = d.StopPlay(ctx)
 	_ = d.StopPlay(context.Background())
 	if snd.starts != 1 || snd.stops != 1 {
 		t.Fatalf("%d %d", snd.starts, snd.stops)
@@ -70,10 +73,10 @@ func TestDeviceEmitsProtocolEvents(t *testing.T) {
 	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "MESSAGE sip:x SIP/2.0", Headers: map[string]string{"via": "v", "from": "f", "to": "t", "call-id": "q", "cseq": "1 MESSAGE"}, Body: query}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "INVITE sip:x SIP/2.0", Headers: map[string]string{"call-id": "c1", "via": "v", "from": "f", "to": "t"}}); err != nil {
+	if err := d.HandleMessage(context.Background(), inviteMessage()); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "ACK sip:x SIP/2.0", Headers: map[string]string{}}); err != nil {
+	if err := d.HandleMessage(context.Background(), sip.Message{StartLine: "ACK sip:x SIP/2.0", Headers: map[string]string{"call-id": "dialog-319", "cseq": "319 ACK"}}); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]bool{}

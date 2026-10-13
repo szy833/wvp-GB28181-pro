@@ -87,11 +87,13 @@ type ReportConfig struct {
 // deliberately separate from the load generator's own metrics endpoint so
 // collection failures cannot affect SIP/play scheduling.
 type MonitoringConfig struct {
-	Enabled        bool             `yaml:"enabled" json:"enabled"`
-	SampleInterval time.Duration    `yaml:"sampleInterval" json:"sampleInterval"`
-	Prometheus     PrometheusConfig `yaml:"prometheus" json:"prometheus"`
-	ZLM            ZLMConfig        `yaml:"zlm" json:"zlm"`
-	SLO            SLOConfig        `yaml:"slo" json:"slo"`
+	CleanupTimeout  time.Duration    `yaml:"cleanupTimeout" json:"cleanupTimeout"`
+	CleanupInterval time.Duration    `yaml:"cleanupInterval" json:"cleanupInterval"`
+	Enabled         bool             `yaml:"enabled" json:"enabled"`
+	SampleInterval  time.Duration    `yaml:"sampleInterval" json:"sampleInterval"`
+	Prometheus      PrometheusConfig `yaml:"prometheus" json:"prometheus"`
+	ZLM             ZLMConfig        `yaml:"zlm" json:"zlm"`
+	SLO             SLOConfig        `yaml:"slo" json:"slo"`
 }
 
 type PrometheusConfig struct {
@@ -163,11 +165,13 @@ type rawConfig struct {
 }
 
 type rawMonitoring struct {
-	Enabled        bool          `yaml:"enabled"`
-	SampleInterval string        `yaml:"sampleInterval"`
-	Prometheus     rawPrometheus `yaml:"prometheus"`
-	ZLM            ZLMConfig     `yaml:"zlm"`
-	SLO            rawSLO        `yaml:"slo"`
+	CleanupTimeout  string        `yaml:"cleanupTimeout"`
+	CleanupInterval string        `yaml:"cleanupInterval"`
+	Enabled         bool          `yaml:"enabled"`
+	SampleInterval  string        `yaml:"sampleInterval"`
+	Prometheus      rawPrometheus `yaml:"prometheus"`
+	ZLM             ZLMConfig     `yaml:"zlm"`
+	SLO             rawSLO        `yaml:"slo"`
 }
 type rawPrometheus struct {
 	URL          string            `yaml:"url"`
@@ -267,7 +271,19 @@ func Load(path string) (Config, error) {
 }
 
 func monitoringFromRaw(raw rawMonitoring) (MonitoringConfig, error) {
-	m := MonitoringConfig{Enabled: raw.Enabled, SampleInterval: 15 * time.Second}
+	m := MonitoringConfig{Enabled: raw.Enabled, SampleInterval: 15 * time.Second, CleanupTimeout: 30 * time.Second, CleanupInterval: time.Second}
+	for _, item := range []struct {
+		name, value string
+		target      *time.Duration
+	}{{"cleanupTimeout", raw.CleanupTimeout, &m.CleanupTimeout}, {"cleanupInterval", raw.CleanupInterval, &m.CleanupInterval}} {
+		if item.value != "" {
+			d, err := time.ParseDuration(item.value)
+			if err != nil || d <= 0 {
+				return MonitoringConfig{}, fmt.Errorf("monitoring.%s must be a positive duration", item.name)
+			}
+			*item.target = d
+		}
+	}
 	if raw.SampleInterval != "" {
 		d, err := time.ParseDuration(raw.SampleInterval)
 		if err != nil {
@@ -433,8 +449,12 @@ func (c Config) Validate() error {
 		return errors.New("monitoring.prometheus.step must be positive")
 	}
 	if c.Monitoring.Enabled {
-		if err := validateHTTPURL("monitoring.prometheus.url", c.Monitoring.Prometheus.URL); err != nil {
-			return err
+		if c.Monitoring.Prometheus.URL != "" {
+			if err := validateHTTPURL("monitoring.prometheus.url", c.Monitoring.Prometheus.URL); err != nil {
+				return err
+			}
+		} else if !c.Monitoring.ZLM.Enabled {
+			return errors.New("at least one monitoring source must be configured")
 		}
 		if c.Monitoring.ZLM.Enabled {
 			if err := validateHTTPURL("monitoring.zlm.url", c.Monitoring.ZLM.URL); err != nil {
