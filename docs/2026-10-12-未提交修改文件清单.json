@@ -1,0 +1,1216 @@
+{
+  "generatedAt": "2026-10-12T22:43:27.443187+08:00",
+  "head": "3c2d3eb53005806e1bb65d66a77b30799408b147",
+  "isCommitHistory": false,
+  "commitsCreated": 0,
+  "stagedFilesAtSnapshot": [],
+  "counts": {
+    "01-WVP统一生命周期与迁移": 98,
+    "02-压测工具累计修复": 51,
+    "03-设计验收与提交记录": 35,
+    "排除：本地配置与凭据": 2,
+    "排除：测试证据与生成物": 6784
+  },
+  "note": "当前工作树清单，不是实际提交记录；不包含或读取 t.cap。源码/文档与本地配置逐项列出，生成物仅按目录统计，不读取其内容。",
+  "excludedArtifactDirectories": {
+    "tools/gb28181-load-test/bin/gb28181-load-test": 1,
+    "tools/gb28181-load-test/bin/gb28181-load-test-candidate-20261011": 1,
+    "tools/gb28181-load-test/bin/gb28181-load-test-candidate-20261011-v2": 1,
+    "tools/gb28181-load-test/bin/gb28181-load-test-candidate-20261012-senddiag": 1,
+    "tools/gb28181-load-test/media/sample-v2.ps": 1,
+    "tools/gb28181-load-test/media/sample.ps": 1,
+    "tools/gb28181-load-test/reports/.go-cache": 5914,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-bye-final-independent-20261012": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-bye-final-independent-20261012-r2": 4,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-150-20261012-r1-preflight": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-150-20261012-r2": 18,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-150-20261012-r2-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-150-20261012-r2-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-200-20261012-r1": 18,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-200-20261012-r1-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-200-20261012-r1-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-250-20261012-r1-preflight": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-300-20261012-r1-preflight": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-300-20261012-r2": 14,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-300-20261012-r2-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-300-20261012-r2-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-300-20261012-r3": 12,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-capacity-300-20261012-r3-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-fifty-full-replay": 14,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-final-verification": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-redis-clock-final-independent-20261012": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-redis-clock-final-report-20261012": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-remaining-final-independent": 4,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-api-replay": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-api-replay-r2": 10,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-download-121": 9,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-download-121-r2": 11,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-no-media-timeout": 8,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-no-media-timeout-r2": 8,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-no-reader-replay": 10,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-playback-121": 10,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-stop-before-media": 8,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-tcp-active-late-sip": 6,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-single-tcp-active-ssrc-correction": 6,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-senddiag-20261012-preflight": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-senddiag-20261012-r2": 17,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-senddiag-20261012-r2-independent": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-senddiag-20261012-r2-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-zlmfix-20261012-r1": 18,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-zlmfix-20261012-r1-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-100-zlmfix-20261012-r1-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-20261012": 17,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-20261012-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-senddiag-20261012": 18,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-senddiag-20261012-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-zlmfix-20261012-r1": 18,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-zlmfix-20261012-r1-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-25-zlmfix-20261012-r1-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-50-senddiag-20261012-preflight": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-50-senddiag-20261012-r2": 18,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-50-senddiag-20261012-r2-independent": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-stair-50-senddiag-20261012-r2-preflight": 3,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-abrupt-device-exit": 10,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-api-replay-bye": 14,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-offline-bye-replay-20261012": 14,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-offline-bye-retest-20261012": 8,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-offline-bye-retest-20261012-r2": 10,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-redis-clock-abrupt-20261012": 2,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-redis-clock-abrupt-20261012-r2": 11,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-redis-clock-replay-20261012": 15,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-ten-udp-late-hooks": 14,
+    "tools/gb28181-load-test/reports/invite-lifecycle-20261011-twentyfive-full-replay": 14,
+    "tools/gb28181-load-test/reports/live-20261011": 57,
+    "tools/gb28181-load-test/reports/local-test-10.csv": 1,
+    "tools/gb28181-load-test/reports/local-test-10.details.csv": 1,
+    "tools/gb28181-load-test/reports/local-test-10.json": 1,
+    "tools/gb28181-load-test/reports/media-adaptation-20261011": 25,
+    "tools/gb28181-load-test/reports/media-stair-20261011": 248,
+    "tools/gb28181-load-test/reports/retest-20261011": 60,
+    "tools/gb28181-load-test/reports/sample-mpeg2-experiment.ps": 1,
+    "tools/gb28181-load-test/scripts/__pycache__": 2,
+    "tools/gb28181-load-test/target/gb28181-load-test-senddiag-source-check": 1,
+    "tools/gb28181-load-test/target/local-stop-diagnostic-fixed-20261012.json": 1,
+    "tools/gb28181-load-test/target/protocol-acceptance": 1,
+    "tools/gb28181-load-test/target/send-diagnostics-tests-20261012-final.jsonl": 1,
+    "tools/gb28181-load-test/target/send-diagnostics-tests-20261012-r2.jsonl": 1,
+    "tools/gb28181-load-test/target/send-diagnostics-tests-20261012.jsonl": 1,
+    "tools/gb28181-load-test/target/stair-stop-diagnostic": 1
+  },
+  "files": [
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/common/InviteInfo.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/common/InviteInfoDeleteResult.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/common/InviteLifecycle.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/common/InviteWriteResult.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/common/VideoManagerConstants.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/bean/SsrcTransaction.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/controller/ChannelController.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/controller/GBRecordController.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/controller/PlayController.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/controller/PlaybackController.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/dao/CommonGBChannelMapper.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/dao/DeviceChannelMapper.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/dao/InvitePlayProjectionMapper.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/dao/provider/H2ChannelUpsertProvider.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/dao/provider/MysqlChannelUpsertProvider.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/dao/provider/PostgresStyleUpsertProvider.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/IDeviceChannelService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/IInviteStreamService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/IPlayService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/DeviceChannelServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/DeviceServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteInfoCleanupStore.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " D",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteInfoRedisIndex.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/InvitePlayProjectionStore.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteRepository.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteSnapshotService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteStreamServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/PlatformServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/PlayServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/service/impl/SourceOtherServiceForGbImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/session/SSRCFactory.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/session/SipInviteSessionManager.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/task/InviteInfoCleanupTask.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " D",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/task/InviteInfoIndexBackfillTask.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/task/InviteInfoPendingCleanupTask.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/task/InviteLifecyclePrerequisites.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/task/SipInviteSessionCleanupTask.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/cmd/ISIPCommanderForPlatform.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/cmd/impl/InviteSipSessionCommitter.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/cmd/impl/SIPCommander.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/cmd/impl/SIPCommanderForPlatform.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/event/request/impl/ByeRequestProcessor.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/event/request/impl/message/notify/cmd/MediaStatusNotifyMessageHandler.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/gb28181/transmit/event/response/impl/InviteResponseProcessor.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/media/abl/ABLMediaNodeServerService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/media/service/IMediaNodeServerService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/media/service/IMediaServerService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/media/service/impl/MediaServerServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/media/zlm/ZLMMediaNodeServerService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/service/IReceiveRtpServerService.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/service/bean/RTPServerParam.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/service/bean/SSRCInfo.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/service/impl/RtpServerServiceImpl.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/vmanager/TestController.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/main/java/com/genersoft/iot/vmp/web/gb28181/ApiStreamController.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/controller/ChannelControllerTimeoutTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/controller/PlayControllerTimeoutTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/controller/PlaybackAndDownloadTimeoutTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/dao/provider/ChannelUpsertProjectionTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/DeviceServiceImplOfflineTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteAtomicCleanupRedisTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteAtomicCleanupVerifier.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteByeTerminationRedisTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteByeTerminationTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteCleanupRegressionTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteCleanupRegressionVerifier.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteInfoRedisIndexTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteJournalRegressionVerifier.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteLifecycleRedisVerifier.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InvitePlayProjectionTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InvitePlayProjectionVerifier.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteSnapshotServiceTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteStartupContextTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteStreamServiceImplTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/InviteStreamServiceRedisIntegrationTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/MediaDepartureListenerTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/PlatformInviteActivationTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/PlayServiceImplDownloadCleanupTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/PlayServiceImplInviteCallbackTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/service/impl/PlayServiceImplStopTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/session/SSRCFactoryLifecycleTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/session/SSRCFactoryTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/session/SipInviteSessionConcurrencyVerifier.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/session/SipInviteSessionManagerTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/session/SipInviteSessionTransactionsTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/task/InviteInfoCleanupTaskTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/task/InviteInfoIndexBackfillTaskTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/transmit/cmd/impl/SIPCommanderPlaybackCallIdTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/transmit/event/request/impl/ByeRequestProcessorTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/gb28181/transmit/event/request/impl/message/notify/cmd/MediaStatusNotifyMessageHandlerTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/service/impl/RtpServerServiceImplTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "src/test/java/com/genersoft/iot/vmp/web/gb28181/ApiStreamControllerTimeoutTest.java",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "数据库/2.7.4-h2/h2-schema.sql",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "数据库/2.7.4-h2/更新-Invite生命周期.sql",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "数据库/2.7.4/初始化-mysql-2.7.4.sql",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "数据库/2.7.4/初始化-postgresql-kingbase-2.7.4.sql",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "数据库/2.7.4/更新-mysql-Invite生命周期.sql",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "数据库/2.7.4/更新-postgresql-kingbase-Invite生命周期.sql",
+      "group": "01-WVP统一生命周期与迁移",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/README.md",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/cmd/gb28181-load-test/cleanup_verdict_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/cmd/gb28181-load-test/main.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/cmd/gb28181-load-test/protocol_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/config/config.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/config/config_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/device/device.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/device/device_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/device/dialog_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/device/media_stats_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/device/shutdown_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/metrics/availability_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/metrics/markdown.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/metrics/report.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/metrics/report_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/metrics/send_diagnostics_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "本次新增"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/metrics/verdict.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/monitoring/cleanup.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/monitoring/cleanup_response_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/monitoring/cleanup_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/monitoring/sampler.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/monitoring/scope_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/monitoring/zlm.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/lifecycle_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/media_profile_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/mux.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/pacing_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/prepare.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/prepare_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/send_diagnostics.go",
+      "group": "02-压测工具累计修复",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/send_diagnostics_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "本次新增"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/rtp/sender.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/rtp/source.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/rtp/source_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/rtp/tcp_sender.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/rtp/tcp_sender_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/rtp/timeline.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/runner/http_confirmation_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/runner/http_control.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/runner/runner.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计并含本次追加"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/runner/runner_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/runner/scheduler.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/runner/scheduler_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/runner/send_diagnostics_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/internal/runner/statistics_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/sip/message.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/sip/message_test.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/internal/sip/sdp.go",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/scripts/lifecycle_evidence.py",
+      "group": "02-压测工具累计修复",
+      "origin": "本次新增"
+    },
+    {
+      "status": " M",
+      "path": "tools/gb28181-load-test/scripts/prepare-media.sh",
+      "group": "02-压测工具累计修复",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/scripts/test_lifecycle_evidence.py",
+      "group": "02-压测工具累计修复",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-InviteInfo删除重试与幂等停止修复.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-InviteInfo原子删除与清理补偿实施方案.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-InviteInfo原子清理新部署验收.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-InviteInfo清理新部署复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-Invite生命周期并发故障根因与统一改造方案.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-Invite生命周期统一改造实施与验收.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-Invite生命周期部署前排空备份与迁移记录.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-SIP会话并发清理修复方案.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-候选压测工具单路复测记录.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-剩余测试执行与阻塞清单.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-压测工具缺陷修复与复测说明.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-启动修复后真实环境复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-启动循环依赖与SSRC调度生命周期修复.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-媒体时间轴与清理接口适配.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-新版工具媒体并发阶梯测试.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-新部署包SIP会话清理验收.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-真实环境阶梯测试记录.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-11-设备集中退出SIP会话残留定位与复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-50与100路继续阶梯压测.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-BYE与清理调度统一Redis时间实施方案.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-Redis时间统一新部署现场复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-ZLM集中停流崩溃core分析.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-发送错误分类与终态报告修复及25路复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-容量上限阶梯压测.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-新ZLM集中停流与100路复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-未提交修改与中文Git批量提交清单.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-未提交修改文件清单.json",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-生命周期修复后媒体阶梯压测.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/2026-10-12-离线设备BYE有界终止与复验.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "docs/GB28181点播InviteInfo状态与媒体确认流程.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "docs/GB28181虚拟设备压测工具使用手册.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": " M",
+      "path": "docs/sip-invite-session-manager-usage.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "历史累计或工作树现存"
+    },
+    {
+      "status": "??",
+      "path": "docs/本地Git批量提交使用说明.md",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "tools/batch_local_commits.py",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "tools/test_batch_local_commits.py",
+      "group": "03-设计验收与提交记录",
+      "origin": "本次新增"
+    },
+    {
+      "status": "??",
+      "path": "tools/application-dev.yml",
+      "group": "排除：本地配置与凭据"
+    },
+    {
+      "status": "??",
+      "path": "tools/gb28181-load-test/configs/test-10.yaml",
+      "group": "排除：本地配置与凭据"
+    }
+  ]
+}

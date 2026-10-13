@@ -1,5 +1,11 @@
 # GB28181 点播 InviteInfo 状态与媒体确认流程
 
+> 2026-10-12 时钟域补充：BYE 首次/最近尝试、10 秒重发资格、32 秒本地终止以及清理 PENDING 的登记/认领/续租/退避/扫描统一由 Redis TIME 决定。注册、录像、GPS、媒体及其他业务期限不改动。部署须先排空旧活动会话，不混用旧 JVM 时间记录。实现与真实环境验收边界见 [BYE与清理调度统一Redis时间实施方案](2026-10-12-BYE与清理调度统一Redis时间实施方案.md)。
+
+> 2026-10-12 BYE 补充：对端确认与本地终止分开记录。首次合法 BYE 尝试起 32 秒后，只有原代 RTP/STATE 已确认关闭，才能在租约/CAS 保护下记录本地终止、继续删除 SIP；不伪造 ACK。等待起点不被重试刷新。方案、验证和部署边界见 [离线设备BYE有界终止与复验](2026-10-12-离线设备BYE有界终止与复验.md)。
+
+> 2026-10-11 源码已改为统一 Invite 生命周期协议。以下 2026-07-30 正文保留为历史排障说明，不再代表当前创建顺序和成功条件。当前以 `inviteId` 为不可变身份，先认领和持久化计划，再创建 RTP/发送 SIP；`sipAccepted`、`sipSessionConfirmed`、`sipReady`、`mediaArrived` 及数据库代次投影均确认后才 ACTIVE。停止保留 STOPPING，四项资源清理确认后 CLOSED，不先删 Invite。完整实现、迁移及验收边界见 [统一改造实施与验收](2026-10-11-Invite生命周期统一改造实施与验收.md)。
+
 **文档日期：** 2026-07-30
 
 ## 1. 结论先行
@@ -293,10 +299,10 @@ RtpResourceContext = WAITING_MEDIA
 
 ## 7. 与停止流程的关系
 
-停止点播时，`PlayServiceImpl.stopInviteResourcesAfterRemoval()` 根据 `InviteInfo.status` 判断是否需要发送 BYE：
+停止点播时，`PlayServiceImpl.processInviteCleanup()` 根据原 owner 快照、设备 BYE 标记和 `InviteInfo.status` 判断是否需要发送 BYE：
 
 ```java
-if (InviteSessionStatus.ok == inviteInfo.getStatus()) {
+if (!job.skipBye() && InviteSessionStatus.ok == inviteInfo.getStatus()) {
     safeSendBye(...);
 }
 ```
@@ -308,6 +314,8 @@ if (InviteSessionStatus.ok == inviteInfo.getStatus()) {
 - 媒体已经成功后停止：发送 BYE、关闭 RTP、清理 InviteInfo 和 SsrcTransaction。
 
 这也是 SIP 会话和媒体资源必须分开管理的原因：即使媒体未到达，只要 SIP 200 OK 已建立，仍可能需要通过 `SipInviteSessionManager` 找到 SIP Transaction 并发送 BYE。
+
+2026-10-11 起，停止先登记持久化清理意图和原 Call-ID，再使用目标 field 的原始字节 CAS 删除 InviteInfo、维护派生索引并确认删除阶段。BYE、SIP、RTP、通道状态分别确认进度，失败只保留清理待办，不恢复活动 InviteInfo。BYE 失败不阻塞独立 RTP/通道状态清理，SIP 句柄保留供重试；使用不会预先删除 SIP 会话的 Dialog 重载发送 BYE。每个步骤前复核 owner，避免旧任务操作新点播。实现、验证边界及待集中执行的真实环境验收见 [InviteInfo原子删除与清理补偿实施方案](2026-10-11-InviteInfo原子删除与清理补偿实施方案.md)。
 
 ## 8. 最终判断条件
 
