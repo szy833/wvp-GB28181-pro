@@ -8,6 +8,7 @@ import com.genersoft.iot.vmp.conf.DynamicTask;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.locks.ReentrantLock;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -30,6 +31,8 @@ public class RtpResourceContext {
             new AtomicReference<>(RtpResourceState.REGISTERING);
     private final AtomicReference<HookData> earlyArrival = new AtomicReference<>();
     private final Object lifecycleLock = new Object();
+    private final ReentrantLock stateLock = new ReentrantLock();
+    private final ReentrantLock closeLock = new ReentrantLock();
     private String taskKey;
     private ScheduledFuture<?> taskOwner;
     private DynamicTask dynamicTask;
@@ -92,14 +95,32 @@ public class RtpResourceContext {
         return authOwner;
     }
 
-    public synchronized boolean markAuthWritten(String key, Object owner) {
-        if (state.get() == RtpResourceState.FAILED || state.get() == RtpResourceState.TIMED_OUT
-                || state.get() == RtpResourceState.CLOSED) {
-            return false;
+    /**
+     * Serializes Redis auth operations with state changes without pinning virtual threads.
+     * Do not call close or business callbacks here: close acquires closeLock before stateLock.
+     */
+    public void withAuthLock(Runnable operation) {
+        stateLock.lock();
+        try {
+            operation.run();
+        } finally {
+            stateLock.unlock();
         }
-        this.authKey = key;
-        this.authOwner = owner;
-        return true;
+    }
+
+    public boolean markAuthWritten(String key, Object owner) {
+        stateLock.lock();
+        try {
+            if (state.get() == RtpResourceState.FAILED || state.get() == RtpResourceState.TIMED_OUT
+                    || state.get() == RtpResourceState.CLOSED) {
+                return false;
+            }
+            this.authKey = key;
+            this.authOwner = owner;
+            return true;
+        } finally {
+            stateLock.unlock();
+        }
     }
 
     public boolean isAuthWritable() {
@@ -111,32 +132,32 @@ public class RtpResourceContext {
     /** Registers a task or immediately stops it if this context already terminated. */
     public boolean registerTask(String taskKey, ScheduledFuture<?> future, DynamicTask dynamicTask) {
         synchronized (lifecycleLock) {
-            if (isTerminal()) {
-                if (future != null && dynamicTask != null) {
-                    dynamicTask.stop(taskKey, future);
-                }
-                return false;
+            if (!isTerminal()) {
+                this.taskKey = taskKey;
+                this.taskOwner = future;
+                this.dynamicTask = dynamicTask;
+                return true;
             }
-            this.taskKey = taskKey;
-            this.taskOwner = future;
-            this.dynamicTask = dynamicTask;
-            return true;
         }
+        if (future != null && dynamicTask != null) {
+            dynamicTask.stop(taskKey, future);
+        }
+        return false;
     }
 
     /** Registers a hook or immediately removes it if this context already terminated. */
     public boolean registerHook(HookSubscriptionHandle handle, HookSubscribe subscribe) {
         synchronized (lifecycleLock) {
-            if (isTerminal()) {
-                if (handle != null && subscribe != null) {
-                    subscribe.removeSubscribe(handle);
-                }
-                return false;
+            if (!isTerminal()) {
+                this.hookOwner = handle;
+                this.subscribe = subscribe;
+                return true;
             }
-            this.hookOwner = handle;
-            this.subscribe = subscribe;
-            return true;
         }
+        if (handle != null && subscribe != null) {
+            subscribe.removeSubscribe(handle);
+        }
+        return false;
     }
 
     /** Cleans task and hook owners under the same lock used by registration. */
@@ -180,12 +201,15 @@ public class RtpResourceContext {
     }
 
     public boolean moveAuthKey(String oldKey, String newKey) {
-        synchronized (this) {
+        stateLock.lock();
+        try {
             if (!Objects.equals(this.authKey, oldKey) || !isAuthWritable()) {
                 return false;
             }
             this.authKey = newKey;
             return true;
+        } finally {
+            stateLock.unlock();
         }
     }
 
@@ -197,43 +221,47 @@ public class RtpResourceContext {
         this.terminalCleanup = cleanup == null ? legacyCleanup : cleanup;
     }
 
-    public synchronized boolean transitionTo(RtpResourceState target) {
+    public boolean transitionTo(RtpResourceState target) {
         Objects.requireNonNull(target, "target");
-        while (true) {
-            RtpResourceState current = state.get();
+        RtpResourceState current;
+        stateLock.lock();
+        try {
+            current = state.get();
             if (!isAllowed(current, target)) {
                 return false;
             }
-            if (state.compareAndSet(current, target)) {
-                logStateTransition(current, target, "explicit transition");
-                return true;
-            }
+            state.set(target);
+        } finally {
+            stateLock.unlock();
         }
+        logStateTransition(current, target, "explicit transition");
+        return true;
     }
 
     public boolean markWaitingMedia(int port, String zlmStreamId) {
         HookData pending;
         boolean successClaimed = false;
-        synchronized (this) {
+        stateLock.lock();
+        try {
             if (!state.compareAndSet(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA)) {
                 return false;
             }
             this.port = port;
-            logStateTransition(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA,
-                    "RTP listener created on port " + port);
             pending = earlyArrival.getAndSet(null);
             if (pending != null) {
                 // Claim SUCCESS while holding the same lifecycle lock as timeout
                 // and failure transitions; the cached arrival cannot be lost.
                 successClaimed = state.compareAndSet(RtpResourceState.WAITING_MEDIA,
                         RtpResourceState.SUCCESS);
-                if (successClaimed) {
-                    logStateTransition(RtpResourceState.WAITING_MEDIA, RtpResourceState.SUCCESS,
-                            "media arrival received before listener completion");
-                }
             }
+        } finally {
+            stateLock.unlock();
         }
+        logStateTransition(RtpResourceState.REGISTERING, RtpResourceState.WAITING_MEDIA,
+                "RTP listener created on port " + port);
         if (successClaimed) {
+            logStateTransition(RtpResourceState.WAITING_MEDIA, RtpResourceState.SUCCESS,
+                    "media arrival received before listener completion");
             runCleanup(successCleanup);
             runCallback(0, "success", pending);
         }
@@ -256,10 +284,13 @@ public class RtpResourceContext {
     }
 
     public boolean completeSuccess(HookData data) {
-        synchronized (this) {
+        stateLock.lock();
+        try {
             if (!state.compareAndSet(RtpResourceState.WAITING_MEDIA, RtpResourceState.SUCCESS)) {
                 return false;
             }
+        } finally {
+            stateLock.unlock();
         }
         logStateTransition(RtpResourceState.WAITING_MEDIA, RtpResourceState.SUCCESS, "media arrival");
         runCleanup(successCleanup);
@@ -281,7 +312,8 @@ public class RtpResourceContext {
 
     private boolean completeFailureState(RtpResourceState terminalState, int code, String msg, HookData data) {
         RtpResourceState previous;
-        synchronized (this) {
+        stateLock.lock();
+        try {
             RtpResourceState current;
             do {
                 current = state.get();
@@ -290,6 +322,8 @@ public class RtpResourceContext {
                 }
             } while (!state.compareAndSet(current, terminalState));
             previous = current;
+        } finally {
+            stateLock.unlock();
         }
         logStateTransition(previous, terminalState, msg);
         runCleanup(terminalCleanup);
@@ -297,18 +331,28 @@ public class RtpResourceContext {
         return true;
     }
 
-    public synchronized boolean close(String reason) {
-        while (true) {
-            RtpResourceState current = state.get();
-            if (current == RtpResourceState.CLOSED || current == RtpResourceState.FAILED
-                    || current == RtpResourceState.TIMED_OUT) {
-                return false;
+    public boolean close(String reason) {
+        // Duplicate closes still wait for the winning close's cleanup to finish.
+        // Unlike a monitor, this lock allows Java 21 virtual threads to unmount.
+        closeLock.lock();
+        try {
+            RtpResourceState current;
+            stateLock.lock();
+            try {
+                current = state.get();
+                if (current == RtpResourceState.CLOSED || current == RtpResourceState.FAILED
+                        || current == RtpResourceState.TIMED_OUT) {
+                    return false;
+                }
+                state.set(RtpResourceState.CLOSED);
+            } finally {
+                stateLock.unlock();
             }
-            if (state.compareAndSet(current, RtpResourceState.CLOSED)) {
-                logStateTransition(current, RtpResourceState.CLOSED, reason);
-                runCleanup(terminalCleanup);
-                return true;
-            }
+            logStateTransition(current, RtpResourceState.CLOSED, reason);
+            runCleanup(terminalCleanup);
+            return true;
+        } finally {
+            closeLock.unlock();
         }
     }
 

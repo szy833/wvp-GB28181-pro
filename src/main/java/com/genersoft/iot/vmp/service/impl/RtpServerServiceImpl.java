@@ -683,14 +683,14 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
                         businessStreamId, "terminal cleanup");
             }
             try {
-                synchronized (context) {
+                context.withAuthLock(() -> {
                     if (context.getAuthKey() != null) {
                         String authOwnerKey = context.getAuthKey() + ":owner";
                         redisTemplate.execute(AUTH_COMPARE_DELETE,
                                 Arrays.asList(context.getAuthKey(), authOwnerKey),
                                 String.valueOf(context.getAuthOwner()));
                     }
-                }
+                });
             } catch (Exception e) { log.warn("回滚RTP鉴权失败: {}", e.getMessage()); }
             try { if (param.getResourceId() == null) ssrcFactory.release(param.getSsrcLease()); }
             catch (Exception e) { log.warn("释放SSRC失败: {}", e.getMessage()); }
@@ -1172,15 +1172,17 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
             ownerToken = UUID.randomUUID().toString();
             RtpResourceContext context = result == null ? null : result.getContext();
             if (context != null) {
-                synchronized (context) {
+                final String writeKey = key;
+                final String writeOwner = ownerToken;
+                context.withAuthLock(() -> {
                     if (!context.isAuthWritable()) {
                         throw new IllegalStateException("RTP resource is no longer writable");
                     }
-                    writeAuthValue(key, hookResultForOnPublish, ownerToken);
-                    if (!context.markAuthWritten(key, ownerToken)) {
-                        deleteAuthIfOwner(key, ownerToken);
+                    writeAuthValue(writeKey, hookResultForOnPublish, writeOwner);
+                    if (!context.markAuthWritten(writeKey, writeOwner)) {
+                        deleteAuthIfOwner(writeKey, writeOwner);
                     }
-                }
+                });
             } else {
                 writeAuthValue(key, hookResultForOnPublish, ownerToken);
             }
@@ -1243,7 +1245,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
          }
          String oldKey = authKey(oldStreamId);
          String newKey = authKey(newStreamId);
-         synchronized (context) {
+         context.withAuthLock(() -> {
              if (!context.isAuthWritable() || !oldKey.equals(context.getAuthKey())
                      || context.getAuthOwner() == null) {
                  log.debug("[刷新RTP鉴权信息] owner 不可迁移: {} -> {}", oldStreamId, newStreamId);
@@ -1268,7 +1270,7 @@ public class RtpServerServiceImpl implements IReceiveRtpServerService {
              } else {
                  log.warn("[刷新RTP鉴权信息] owner 校验失败: {} -> {}", oldStreamId, newStreamId);
              }
-         }
+         });
      }
 
      private String authKey(String streamId) {

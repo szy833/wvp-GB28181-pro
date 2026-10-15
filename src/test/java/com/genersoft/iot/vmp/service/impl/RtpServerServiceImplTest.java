@@ -17,10 +17,18 @@ import com.genersoft.iot.vmp.service.bean.RtpServerOpenResult;
 import com.genersoft.iot.vmp.service.bean.RtpResourceContext;
 import com.genersoft.iot.vmp.service.bean.SSRCInfo;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 import java.lang.reflect.Method;
@@ -31,6 +39,96 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class RtpServerServiceImplTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"write", "move"})
+    void closeWaitsForInFlightAuthenticationAndCleansLatestKey(String operation) throws Exception {
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "redisTemplate", redis);
+        RtpResourceContext context = new RtpResourceContext("resource", "business", "zlm", null, null);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch closeStarted = new CountDownLatch(1);
+        Runnable blockedRedis = () -> {
+            entered.countDown();
+            try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+            catch (InterruptedException e) { throw new AssertionError(e); }
+        };
+        String expectedKey = VideoManagerConstants.RTP_AUTHENTICATE + ":new";
+        AtomicReference<String> cleanedKey = new AtomicReference<>();
+        AtomicReference<Object> cleanedOwner = new AtomicReference<>();
+        AtomicInteger cleanups = new AtomicInteger();
+        context.setTerminalCleanup(() -> context.withAuthLock(() -> {
+            cleanedKey.set(context.getAuthKey());
+            cleanedOwner.set(context.getAuthOwner());
+            cleanups.incrementAndGet();
+        }));
+        Runnable authOperation;
+        if ("write".equals(operation)) {
+            ValueOperations<String, Object> values = mock(ValueOperations.class);
+            when(redis.opsForValue()).thenReturn(values);
+            doAnswer(invocation -> { blockedRedis.run(); return null; }).when(values).set(anyString(), any());
+            authOperation = () -> service.addAuthenticateInfo(
+                    new RtpServerOpenResult(1234, "resource", "business", "zlm", context),
+                    "new", "published", true, false, null);
+        } else {
+            context.markAuthWritten(VideoManagerConstants.RTP_AUTHENTICATE + ":old", "owner");
+            @SuppressWarnings("unchecked")
+            Map<String, RtpResourceContext> active =
+                    (Map<String, RtpResourceContext>) ReflectionTestUtils.getField(service, "activeResources");
+            active.put("resource", context);
+            doAnswer(invocation -> { blockedRedis.run(); return 1L; })
+                    .when(redis).execute(any(), anyList(), eq("owner"));
+            authOperation = () -> service.refreshAuthenticateInfo("old", "new");
+        }
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var auth = executor.submit(authOperation);
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            var close = executor.submit(() -> {
+                closeStarted.countDown();
+                return context.close("concurrent auth");
+            });
+            assertTrue(closeStarted.await(2, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class, () -> close.get(100, TimeUnit.MILLISECONDS));
+            assertTrue(context.isAuthWritable());
+            release.countDown();
+            auth.get(2, TimeUnit.SECONDS);
+            assertTrue(close.get(2, TimeUnit.SECONDS));
+            assertEquals(expectedKey, cleanedKey.get());
+            assertNotNull(cleanedOwner.get());
+            assertEquals(context.getAuthOwner(), cleanedOwner.get());
+            assertEquals(1, cleanups.get());
+            assertFalse(context.isAuthWritable());
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void authenticationWriteDoesNotHoldContextMonitor() {
+        RedisTemplate<String, Object> redis = mock(RedisTemplate.class);
+        ValueOperations<String, Object> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        RtpServerServiceImpl service = new RtpServerServiceImpl();
+        ReflectionTestUtils.setField(service, "redisTemplate", redis);
+        RtpResourceContext context = new RtpResourceContext("resource", "business", "zlm", null, null);
+        Map<String, Object> stored = new java.util.HashMap<>();
+        doAnswer(invocation -> {
+            assertFalse(Thread.holdsLock(context), "Redis write must not pin a carrier");
+            stored.put(invocation.getArgument(0), invocation.getArgument(1));
+            return null;
+        }).when(values).set(anyString(), any());
+
+        service.addAuthenticateInfo(new RtpServerOpenResult(1234, "resource", "business", "zlm", context),
+                "business", "published", true, false, null);
+
+        assertEquals(VideoManagerConstants.RTP_AUTHENTICATE + ":business", context.getAuthKey());
+        assertEquals(context.getAuthOwner(), stored.get(context.getAuthKey() + ":owner"));
+        assertNotNull(stored.get(context.getAuthKey()));
+    }
 
     @Test
     void departureEventPreservesOriginUrl() {
@@ -243,7 +341,10 @@ class RtpServerServiceImplTest {
         java.util.Map<String, RtpResourceContext> active =
                 (java.util.Map<String, RtpResourceContext>) ReflectionTestUtils.getField(service, "activeResources");
         active.put("resource-1", context);
-        doReturn(1L).when(redis).execute(any(), anyList(), anyString());
+        doAnswer(invocation -> {
+            assertFalse(Thread.holdsLock(context), "Redis migration must not pin a carrier");
+            return 1L;
+        }).when(redis).execute(any(), anyList(), anyString());
 
         SSRCInfo info = new SSRCInfo(1000, "0001", "rtp", "business");
         info.setResourceId("resource-1");
@@ -406,6 +507,15 @@ class RtpServerServiceImplTest {
                 (code, msg, data) -> {});
 
         assertTrue(result.isSuccess());
+        result.getContext().markAuthWritten("auth-key", "owner");
+        doAnswer(invocation -> {
+            assertFalse(Thread.holdsLock(result.getContext()), "Redis cleanup must not pin a carrier");
+            return 1L;
+        }).when(redis).execute(any(), anyList(), anyString());
+        doAnswer(invocation -> {
+            assertFalse(Thread.holdsLock(result.getContext()), "Media cleanup must not pin a carrier");
+            return null;
+        }).when(media).closeStreams(server, "rtp", "business-stream");
         service.closeRTPServer(result);
 
         verify(media).closeRTPServer(server, "rtp", "0000007B");
