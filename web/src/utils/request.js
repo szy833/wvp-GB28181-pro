@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { MessageBox, Message } from 'element-ui'
 import store from '@/store'
+import router from '@/router'
 import { getToken } from '@/utils/auth'
 
 let showLoginConfirm = false
@@ -23,7 +24,6 @@ service.interceptors.request.use(
   },
   error => {
     // do something with request error
-    console.log(error) // for debug
     return Promise.reject(error)
   }
 )
@@ -52,8 +52,14 @@ service.interceptors.response.use(
     }
   },
   error => {
-    console.log(error) // for debug
-    if (error.response.status === 401) {
+    if (error.response && error.response.status === 403 && error.response.data && error.response.data.defaultPassword === true) {
+      store.commit('user/SET_DEFAULT_PASSWORD', true)
+      if (router.currentRoute.path !== '/forceChangePassword') {
+        router.replace('/forceChangePassword', () => {}, () => {})
+      }
+      return Promise.reject(error)
+    }
+    if (error.response && error.response.status === 401) {
       if (!showLoginConfirm && store.getters.showConfirmBoxForLoginLose) {
         // to re-login
         showLoginConfirm = true
@@ -77,9 +83,9 @@ service.interceptors.response.use(
       }
     }else {
       if (!store.getters.showConfirmBoxForLoginLose) {
-        return
+        return Promise.reject(error)
       }
-      let data = error.response.data
+      const data = error.response && error.response.data
       if (data && data.msg) {
         Message.error({
           message: data.msg,
@@ -92,7 +98,7 @@ service.interceptors.response.use(
         })
       }
     }
-    // return Promise.reject(error)
+    return Promise.reject(error)
   }
 )
 

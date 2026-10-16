@@ -2,6 +2,7 @@ package com.genersoft.iot.vmp.conf.security;
 
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.security.dto.JwtUser;
+import com.genersoft.iot.vmp.service.IUserService;
 import com.genersoft.iot.vmp.storager.dao.dto.Role;
 import com.genersoft.iot.vmp.storager.dao.dto.User;
 import jakarta.servlet.FilterChain;
@@ -34,12 +35,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Autowired
     private UserSetting userSetting;
 
+    @Autowired
+    private IUserService userService;
+
 
     @Override
     protected void doFilterInternal(HttpServletRequest servletRequest, HttpServletResponse response, FilterChain chain) throws IOException, ServletException {
         ContentCachingRequestWrapper request = new ContentCachingRequestWrapper(servletRequest);
         // 忽略登录请求的token验证
-        String requestURI = request.getRequestURI();
+        String requestURI = request.getRequestURI().substring(request.getContextPath().length());
         if ((requestURI.startsWith("/doc.html") || requestURI.startsWith("/swagger-ui")  ) && !userSetting.getDocEnable()) {
             response.setStatus(HttpServletResponse.SC_NOT_FOUND);
             return;
@@ -74,6 +78,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (StringUtils.isBlank(jwt)) {
                 jwt = request.getHeader(JwtUtils.getApiKeyHeader());
                 if (StringUtils.isBlank(jwt)) {
+                    var authentication = SecurityContextHolder.getContext().getAuthentication();
+                    if (authentication != null && authentication.isAuthenticated()
+                            && authentication.getPrincipal() instanceof User sessionUser
+                            && !allowCurrentUser(sessionUser, request, response, requestURI)) {
+                        return;
+                    }
                     chain.doFilter(request, response);
                     return;
                 }
@@ -81,18 +91,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         JwtUser jwtUser = JwtUtils.verifyToken(jwt);
-        String username = jwtUser.getUserName();
         // TODO 处理各个状态
         switch (jwtUser.getStatus()){
             case EXPIRED:
                 response.setStatus(401);
-                chain.doFilter(request, response);
+                SecurityContextHolder.clearContext();
                 // 异常
                 return;
             case EXCEPTION:
                 // 过期
                 response.setStatus(400);
-                chain.doFilter(request, response);
+                SecurityContextHolder.clearContext();
                 return;
             case EXPIRING_SOON:
                 // 即将过期
@@ -107,8 +116,38 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         Role role = new Role();
         role.setId(jwtUser.getRoleId());
         user.setRole(role);
+        if (!allowCurrentUser(user, request, response, requestURI)) {
+            return;
+        }
         UsernamePasswordAuthenticationToken token = new UsernamePasswordAuthenticationToken(user, jwtUser.getPassword(), new ArrayList<>() );
         SecurityContextHolder.getContext().setAuthentication(token);
         chain.doFilter(request, response);
+    }
+
+    private boolean allowCurrentUser(User user, HttpServletRequest request, HttpServletResponse response,
+                                     String requestURI) throws IOException {
+        User dbUser = userService.getUserById(user.getId());
+        if (dbUser == null) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            SecurityContextHolder.clearContext();
+            return false;
+        }
+        user.setDefaultPassword(dbUser.isDefaultPassword());
+
+        // Read-only identity refresh lets the SPA recover even if its hint cookie was removed.
+        if (user.isDefaultPassword()) {
+            boolean passwordChange = "POST".equals(request.getMethod()) && "/api/user/changePassword".equals(requestURI);
+            boolean identityRead = "POST".equals(request.getMethod()) && "/api/user/userInfo".equals(requestURI);
+            boolean logout = ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
+                    && "/api/user/logout".equals(requestURI);
+            if (!passwordChange && !identityRead && !logout) {
+                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                response.setContentType("application/json;charset=UTF-8");
+                response.getWriter().write("{\"code\":403,\"msg\":\"请先修改默认密码\",\"defaultPassword\":true}");
+                return false;
+            }
+        }
+
+        return true;
     }
 }

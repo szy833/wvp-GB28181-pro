@@ -20,11 +20,16 @@ public interface UserMapper {
             "SET update_time=#{updateTime} " +
             "<if test=\"pushKey != null\">, push_key=#{pushKey}</if>" +
             "<if test=\"role != null\">, role_id=#{role.id}</if>" +
-            "<if test=\"password != null\">, password=#{password}</if>" +
             "<if test=\"username != null\">, username=#{username}</if>" +
             "WHERE id=#{id}" +
             " </script>"})
     int update(User user);
+
+    // Keep password and its restriction flag atomic and out of partial profile updates.
+    @Update("UPDATE wvp_user SET password=#{password}, default_password=FALSE, update_time=#{updateTime} " +
+            "WHERE id=#{id} AND password != #{password}")
+    int changePassword(@Param("id") int id, @Param("password") String password,
+                       @Param("updateTime") String updateTime);
 
     @Delete("DELETE from wvp_user WHERE id != 1 and id=#{id}")
     int delete(int id);

@@ -2,7 +2,7 @@ import router from './router'
 import store from './store'
 import NProgress from 'nprogress' // progress bar
 import 'nprogress/nprogress.css' // progress bar style
-import { getToken, getName, getServerId } from '@/utils/auth' // get token from cookie
+import { getToken, getServerId } from '@/utils/auth' // get token from cookie
 import getPageTitle from '@/utils/get-page-title'
 
 NProgress.configure({ showSpinner: false }) // NProgress Configuration
@@ -20,17 +20,29 @@ router.beforeEach(async(to, from, next) => {
   const hasToken = getToken()
 
   if (hasToken) {
+    if (!store.state.user.identityLoaded) {
+      try {
+        // Cookies are only hints; refresh the restriction from the server on page reload.
+        await store.dispatch('user/getUserInfo')
+        store.commit('user/SET_SERVER_ID', getServerId())
+      } catch (error) {
+        await store.dispatch('user/resetToken')
+        next('/login')
+        NProgress.done()
+        return
+      }
+    }
+    if (store.state.user.defaultPassword) {
+      next(to.path === '/forceChangePassword' ? undefined : { path: '/forceChangePassword', replace: true })
+      NProgress.done()
+      return
+    }
     if (to.path === '/login') {
       // if is logged in, redirect to the home page
       next({ path: '/' })
       NProgress.done()
     } else {
-      const hasGetUserInfo = store.getters.name
-      if (!hasGetUserInfo) {
-        store.commit('user/SET_NAME', getName())
-        store.commit('user/SET_SERVER_ID', getServerId())
-      }
-      next()
+      next(to.path === '/forceChangePassword' ? { path: '/', replace: true } : undefined)
     }
   } else {
     /* has no token*/

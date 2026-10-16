@@ -3,6 +3,7 @@ package com.genersoft.iot.vmp.vmanager.user;
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.ControllerException;
 import com.genersoft.iot.vmp.conf.security.JwtUtils;
+import com.genersoft.iot.vmp.conf.security.PasswordComplexityValidator;
 import com.genersoft.iot.vmp.conf.security.SecurityUtils;
 import com.genersoft.iot.vmp.conf.security.dto.LoginUser;
 import com.genersoft.iot.vmp.service.IRoleService;
@@ -27,6 +28,7 @@ import javax.security.sasl.AuthenticationException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @Tag(name  = "用户管理")
@@ -45,6 +47,9 @@ public class UserController {
 
     @Autowired
     private UserSetting userSetting;
+
+    @Autowired
+    private PasswordComplexityValidator passwordComplexityValidator;
 
     @GetMapping("/login")
     @PostMapping("/login")
@@ -89,8 +94,12 @@ public class UserController {
             if (user == null) {
                 throw new ControllerException(ErrorCode.ERROR100);
             }
+            // 密码复杂度校验
+            if (!passwordComplexityValidator.validatePassword(password, username)) {
+                throw new ControllerException(ErrorCode.ERROR400.getCode(), passwordComplexityValidator.getValidationErrorMessage());
+            }
             //int userId = SecurityUtils.getUserId();
-            boolean result = userService.changePassword(user.getId(), DigestUtils.md5DigestAsHex(password.getBytes()));
+            boolean result = userService.changePassword(user.getId(), DigestUtils.md5DigestAsHex(password.getBytes(StandardCharsets.UTF_8)));
             if (!result) {
                 throw new ControllerException(ErrorCode.ERROR100);
             }
@@ -111,6 +120,10 @@ public class UserController {
         if (ObjectUtils.isEmpty(username) || ObjectUtils.isEmpty(password) || roleId == null) {
             throw new ControllerException(ErrorCode.ERROR400.getCode(), "参数不可为空");
         }
+        // 密码复杂度校验
+        if (!passwordComplexityValidator.validatePassword(password, username)) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), passwordComplexityValidator.getValidationErrorMessage());
+        }
         // 获取当前登录用户id
         int currenRoleId = SecurityUtils.getUserInfo().getRole().getId();
         if (currenRoleId != 1) {
@@ -119,7 +132,7 @@ public class UserController {
         }
         User user = new User();
         user.setUsername(username);
-        user.setPassword(DigestUtils.md5DigestAsHex(password.getBytes()));
+        user.setPassword(DigestUtils.md5DigestAsHex(password.getBytes(StandardCharsets.UTF_8)));
         //新增用户的pushKey的生成规则为md5(时间戳+用户名)
         user.setPushKey(DigestUtils.md5DigestAsHex((System.currentTimeMillis()+password).getBytes()));
         Role role = roleService.getRoleById(roleId);
@@ -203,11 +216,19 @@ public class UserController {
             throw new ControllerException(ErrorCode.ERROR100);
         }
         Role role = userInfo.getRole();
-        if (role != null && role.getId() == 1) {
-            boolean result = userService.changePassword(userId, DigestUtils.md5DigestAsHex(password.getBytes()));
-            if (!result) {
-                throw new ControllerException(ErrorCode.ERROR100);
-            }
+        if (role == null || role.getId() != 1) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), "用户无权限");
+        }
+        User changeUser = userService.getUserById(userId);
+        if (changeUser == null) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), "用户不存在");
+        }
+        if (!passwordComplexityValidator.validatePassword(password, changeUser.getUsername())) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), passwordComplexityValidator.getValidationErrorMessage());
+        }
+        boolean result = userService.changePassword(userId, DigestUtils.md5DigestAsHex(password.getBytes(StandardCharsets.UTF_8)));
+        if (!result) {
+            throw new ControllerException(ErrorCode.ERROR100);
         }
     }
 
@@ -220,7 +241,10 @@ public class UserController {
         if (userInfo == null) {
             throw new ControllerException(ErrorCode.ERROR100);
         }
-        User user = userService.getUser(userInfo.getUsername(), userInfo.getPassword());
+        User user = userService.getUserById(userInfo.getId());
+        if (user == null) {
+            throw new ControllerException(ErrorCode.ERROR100);
+        }
         return new LoginUser(user, LocalDateTime.now());
     }
 }

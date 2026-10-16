@@ -17,7 +17,10 @@ import {
   removeToken,
   removeName,
   setServerId,
-  removeServerId
+  removeServerId,
+  getDefaultPassword,
+  setDefaultPassword,
+  removeDefaultPassword
 } from '@/utils/auth'
 import { resetRouter } from '@/router'
 
@@ -26,6 +29,8 @@ const getDefaultState = () => {
     token: getToken(),
     name: '',
     serverId: '',
+    defaultPassword: getDefaultPassword(),
+    identityLoaded: false,
     showConfirmBoxForLoginLose: true
   }
 }
@@ -45,6 +50,12 @@ const mutations = {
   SET_SERVER_ID: (state, serverId) => {
     state.serverId = serverId
   },
+  SET_DEFAULT_PASSWORD: (state, defaultPassword) => {
+    state.defaultPassword = defaultPassword
+  },
+  SET_IDENTITY_LOADED: (state, loaded) => {
+    state.identityLoaded = loaded
+  },
   SET_CONFIRM_BOX: (state, status) => {
     state.showConfirmBoxForLoginLose = status
   }
@@ -63,10 +74,13 @@ const actions = {
         commit('SET_TOKEN', data.accessToken)
         commit('SET_NAME', data.username)
         commit('SET_SERVER_ID', data.serverId)
+        commit('SET_DEFAULT_PASSWORD', !!data.defaultPassword)
+        commit('SET_IDENTITY_LOADED', true)
         commit('SET_CONFIRM_BOX', true)
         setToken(data.accessToken)
         setName(data.username)
         setServerId(data.serverId)
+        setDefaultPassword(data.defaultPassword)
         resolve()
       }).catch(error => {
         reject(error)
@@ -74,25 +88,19 @@ const actions = {
     })
   },
   // user logout
-  logout({ commit, state }) {
-    return new Promise((resolve, reject) => {
-      logout(state.token).then(() => {
-        removeToken()
-        removeServerId()
-        removeName()
-        resetRouter()
-        commit('RESET_STATE')
-        resolve()
-      }).catch(error => {
-        reject(error)
-      })
-    })
+  logout({ dispatch }) {
+    // Local logout must still work if the server is unavailable or the token expired.
+    return logout().catch(() => {}).then(() => dispatch('resetToken'))
   },
 
   // remove token
   resetToken({ commit }) {
     return new Promise(resolve => {
       removeToken() // must remove  token  first
+      removeServerId()
+      removeName()
+      removeDefaultPassword()
+      resetRouter()
       commit('RESET_STATE')
       resolve()
     })
@@ -102,6 +110,11 @@ const actions = {
     return new Promise((resolve, reject) => {
       getUserInfo().then(response => {
         const { data } = response
+        commit('SET_NAME', data.username)
+        commit('SET_DEFAULT_PASSWORD', !!data.defaultPassword)
+        commit('SET_IDENTITY_LOADED', true)
+        setName(data.username)
+        setDefaultPassword(data.defaultPassword)
         resolve(data)
       }).catch(error => {
         reject(error)
@@ -109,7 +122,7 @@ const actions = {
     })
   },
 
-  changePushKey({ commit }, params) {
+  changePushKey(_, params) {
     return new Promise((resolve, reject) => {
       changePushKey(params).then(response => {
         const { data } = response
@@ -120,7 +133,7 @@ const actions = {
     })
   },
 
-  queryList({ commit }, params) {
+  queryList(_, params) {
     return new Promise((resolve, reject) => {
       queryList(params).then(response => {
         const { data } = response
@@ -131,7 +144,7 @@ const actions = {
     })
   },
 
-  removeById({ commit }, id) {
+  removeById(_, id) {
     return new Promise((resolve, reject) => {
       removeById(id).then(response => {
         const { data } = response
@@ -142,7 +155,7 @@ const actions = {
     })
   },
 
-  add({ commit }, params) {
+  add(_, params) {
     return new Promise((resolve, reject) => {
       add(params).then(response => {
         const { data } = response
@@ -157,6 +170,9 @@ const actions = {
     return new Promise((resolve, reject) => {
       changePassword(params).then(response => {
         const { data } = response
+        // 修改成功后清除默认密码标记
+        commit('SET_DEFAULT_PASSWORD', false)
+        removeDefaultPassword()
         resolve(data)
       }).catch(error => {
         reject(error)
@@ -164,7 +180,7 @@ const actions = {
     })
   },
 
-  changePasswordForAdmin({ commit }, params) {
+  changePasswordForAdmin(_, params) {
     return new Promise((resolve, reject) => {
       changePasswordForAdmin(params).then(response => {
         const { data } = response

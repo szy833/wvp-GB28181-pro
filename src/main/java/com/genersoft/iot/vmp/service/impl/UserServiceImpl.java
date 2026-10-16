@@ -3,6 +3,7 @@ package com.genersoft.iot.vmp.service.impl;
 import com.genersoft.iot.vmp.service.IUserService;
 import com.genersoft.iot.vmp.storager.dao.UserMapper;
 import com.genersoft.iot.vmp.storager.dao.dto.User;
+import com.genersoft.iot.vmp.utils.DateUtil;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,9 +25,8 @@ public class UserServiceImpl implements IUserService {
 
     @Override
     public boolean changePassword(int id, String password) {
-        User user = userMapper.selectById(id);
-        user.setPassword(password);
-        return userMapper.update(user) > 0;
+        return password != null && !password.isEmpty()
+                && userMapper.changePassword(id, password, DateUtil.getNow()) > 0;
     }
 
     @Override
