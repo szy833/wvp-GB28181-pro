@@ -6,6 +6,16 @@ import {
   getOnlineMediaServerList, getResourceInfo, getSystemConfig, getSystemInfo, info, saveMediaServer
 } from '@/api/server'
 
+const state = {
+  systemConfig: null
+}
+
+const mutations = {
+  SET_SYSTEM_CONFIG(state, config) {
+    state.systemConfig = config
+  }
+}
+
 const actions = {
   getOnlineMediaServerList({ commit }) {
     return new Promise((resolve, reject) => {
@@ -81,6 +91,7 @@ const actions = {
     return new Promise((resolve, reject) => {
       getSystemConfig().then(response => {
         const { data } = response
+        commit('SET_SYSTEM_CONFIG', data)
         resolve(data)
       }).catch(error => {
         reject(error)
@@ -161,6 +172,8 @@ const actions = {
 
 export default {
   namespaced: true,
+  state,
+  mutations,
   actions
 }
 

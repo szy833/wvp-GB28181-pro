@@ -4,10 +4,26 @@ import NProgress from 'nprogress' // progress bar
 import 'nprogress/nprogress.css' // progress bar style
 import { getToken, getServerId } from '@/utils/auth' // get token from cookie
 import getPageTitle from '@/utils/get-page-title'
+import { isJT1078Enabled, setJT1078RouteVisibility } from '@/utils/jt1078'
 
 NProgress.configure({ showSpinner: false }) // NProgress Configuration
 
 const whiteList = ['/login', '/play/share'] // no redirect whitelist
+
+async function refreshJT1078Routes() {
+  let systemConfig = store.state.server && store.state.server.systemConfig
+  if (!systemConfig) {
+    try {
+      systemConfig = await store.dispatch('server/getSystemConfig')
+    } catch (error) {
+      systemConfig = null
+    }
+  }
+  const enabled = isJT1078Enabled(systemConfig)
+  const routes = router.options && router.options.routes
+  setJT1078RouteVisibility(routes, enabled)
+  return enabled
+}
 
 router.beforeEach(async(to, from, next) => {
   // start progress bar
@@ -34,6 +50,12 @@ router.beforeEach(async(to, from, next) => {
     }
     if (store.state.user.defaultPassword) {
       next(to.path === '/forceChangePassword' ? undefined : { path: '/forceChangePassword', replace: true })
+      NProgress.done()
+      return
+    }
+    const jt1078Enabled = await refreshJT1078Routes()
+    if (to.matched && to.matched.some(route => route.meta && route.meta.requiresJt1078) && !jt1078Enabled) {
+      next({ path: '/404', replace: true })
       NProgress.done()
       return
     }

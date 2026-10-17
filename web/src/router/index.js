@@ -125,14 +125,15 @@ export const constantRoutes = [
         path: '/jtDevice',
         name: 'JTDevice',
         component: () => import('@/views/jtDevice/index'),
-        meta: { title: '部标设备', icon: 'jtDevice' }
+        hidden: true,
+        meta: { title: '部标设备', icon: 'jtDevice', requiresJt1078: true }
       },
       {
         hidden: true,
         path: '/jtDevice/record/:phoneNumber/:channelId',
         name: 'JTDeviceRecord',
         component: () => import('@/views/jtDevice/channel/record'),
-        meta: { title: '部标录像' }
+        meta: { title: '部标录像', requiresJt1078: true }
       },
       {
         path: '/push',

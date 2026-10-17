@@ -18,6 +18,7 @@ describe('forced password routing', () => {
     jest.clearAllMocks()
     getToken.mockReturnValue('token')
     store.state.user = { identityLoaded: false, defaultPassword: false }
+    store.state.server = { systemConfig: null }
     store.dispatch.mockImplementation(async() => {
       store.state.user.identityLoaded = true
       store.state.user.defaultPassword = true
@@ -60,5 +61,21 @@ describe('forced password routing', () => {
     await guard(route('/'), route('/'), next)
     expect(store.dispatch).toHaveBeenCalledWith('user/resetToken')
     expect(next).toHaveBeenCalledWith('/login')
+  })
+
+  it('redirects direct JT1078 access when the service is disabled', async() => {
+    store.state.user = { identityLoaded: true, defaultPassword: false }
+    store.state.server = { systemConfig: { jt1078Config: { enable: false } } }
+    const next = jest.fn()
+    await guard({ path: '/jtDevice', meta: {}, matched: [{ meta: { requiresJt1078: true } }] }, route('/'), next)
+    expect(next).toHaveBeenCalledWith({ path: '/404', replace: true })
+  })
+
+  it('allows JT1078 access when the service is enabled', async() => {
+    store.state.user = { identityLoaded: true, defaultPassword: false }
+    store.state.server = { systemConfig: { jt1078Config: { enable: true } } }
+    const next = jest.fn()
+    await guard({ path: '/jtDevice', meta: {}, matched: [{ meta: { requiresJt1078: true } }] }, route('/'), next)
+    expect(next).toHaveBeenCalledWith(undefined)
   })
 })

@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 @Order(3)
 public class JT1078Config {
 
+    private Boolean enable = false;
+
     private Integer port;
 
     private String password;
